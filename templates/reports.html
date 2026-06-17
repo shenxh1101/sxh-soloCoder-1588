@@ -88,6 +88,7 @@
 {% block scripts %}
 <script>
 let currentReportParams = {};
+let lastReportData = null;
 
 document.getElementById('reportType').addEventListener('change', function() {
     const customRange = document.getElementById('customDateRange');
@@ -120,6 +121,7 @@ function generateReport() {
     fetch(url)
         .then(res => res.json())
         .then(data => {
+            lastReportData = data;
             renderReport(data);
         });
 }
@@ -211,12 +213,19 @@ function printReport() {
 }
 
 function exportReportCSV() {
+    if (!lastReportData) {
+        alert('请先生成报表再导出CSV');
+        return;
+    }
+
     let url = '/export/csv?';
-    Object.keys(currentReportParams).forEach(key => {
-        if (currentReportParams[key] && key !== 'type') {
-            url += `${key}=${currentReportParams[key]}&`;
-        }
-    });
+    if (lastReportData.storage_id) {
+        url += `storage_id=${lastReportData.storage_id}&`;
+    }
+    url += `start_date=${lastReportData.export_start_date}&end_date=${lastReportData.export_end_date}`;
+
+    console.log('导出CSV URL:', url);
+    console.log('报表范围:', lastReportData.start_time, '~', lastReportData.end_time);
     window.location.href = url;
 }
 

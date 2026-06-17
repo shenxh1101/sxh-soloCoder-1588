@@ -91,26 +91,33 @@ document.addEventListener('DOMContentLoaded', function() {
 
 function loadManualRecords() {
     const storageId = document.getElementById('storage_id').value;
-    if (!storageId) {
-        fetch(`/storages/${storageId}?hours=168`)
-            .then(res => res.json())
-            .then(data => {
-                const manualRecords = data.records.filter(r => r.is_manual);
-                const container = document.getElementById('manualRecords');
-                
-                if (manualRecords.length === 0) {
-                    container.innerHTML = '<p class="text-muted">暂无手动录入记录</p>';
-                    return;
-                }
+    const container = document.getElementById('manualRecords');
+    container.innerHTML = '<p class="text-muted">加载中...</p>';
 
-                let html = '<table class="data-table"><thead><tr><th>时间</th><th>温度(°C)</th><th>湿度(%)</th></tr></thead><tbody>';
-                manualRecords.slice(-10).reverse().forEach(r => {
-                    html += `<tr><td>${r.recorded_at}</td><td>${r.temperature}</td><td>${r.humidity}</td></tr>`;
-                });
-                html += '</tbody></table>';
-                container.innerHTML = html;
-            });
+    let url = '/api/manual-records?limit=20';
+    if (storageId) {
+        url += `&storage_id=${storageId}`;
     }
+
+    fetch(url)
+        .then(res => res.json())
+        .then(records => {
+            if (records.length === 0) {
+                const filterText = storageId ? '该冷库' : '所有冷库';
+                container.innerHTML = `<p class="text-muted">暂无手动录入记录（${filterText}，最近7天）</p>`;
+                return;
+            }
+
+            let html = '<table class="data-table"><thead><tr><th>冷库名称</th><th>时间</th><th>温度(°C)</th><th>湿度(%)</th></tr></thead><tbody>';
+            records.forEach(r => {
+                html += `<tr><td>${r.storage_name}</td><td>${r.recorded_at}</td><td>${r.temperature}</td><td>${r.humidity}</td></tr>`;
+            });
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        })
+        .catch(err => {
+            container.innerHTML = '<p class="text-muted" style="color:#ef4444;">加载失败：' + err.message + '</p>';
+        });
 }
 
 document.getElementById('storage_id').addEventListener('change', loadManualRecords);

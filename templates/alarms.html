@@ -127,54 +127,76 @@
 {% block scripts %}
 <script>
 function viewAlarmDetail(id) {
-    fetch('/api/active-alarms')
+    fetch(`/api/alarms/${id}`)
         .then(res => res.json())
-        .then(alarms => {
-            const alarm = alarms.find(a => a.id === id);
-            if (!alarm) return;
-            
+        .then(alarm => {
             const body = document.getElementById('alarmDetailBody');
+            const unit = alarm.alarm_type.includes('temp') ? '°C' : '%';
+            const alarmTypeText = alarm.alarm_type.includes('temp') ? '温度报警' : '湿度报警';
+            const alarmTypeDesc = alarm.alarm_type.includes('high') ? '（过高）' : alarm.alarm_type.includes('low') ? '（过低）' : '';
+            
+            let handledSection = '';
+            if (alarm.is_handled) {
+                handledSection = `
+                    <div style="margin-top:1.5rem; padding-top:1rem; border-top:1px solid #e2e8f0;">
+                        <h4 style="margin-bottom:1rem; color:#065f46;">✅ 处理记录</h4>
+                        <div class="detail-grid">
+                            <div class="detail-item">
+                                <label>处理人</label>
+                                <span style="font-weight:600; color:#065f46;">${alarm.handled_by || '-'}</span>
+                            </div>
+                            <div class="detail-item">
+                                <label>处理时间</label>
+                                <span>${alarm.handled_at || '-'}</span>
+                            </div>
+                            <div class="detail-item full-width">
+                                <label>处理备注</label>
+                                <span style="white-space:pre-wrap;">${alarm.handled_note || '（无备注）'}</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                handledSection = `
+                    <div style="margin-top:1.5rem; padding-top:1rem; border-top:1px solid #e2e8f0;">
+                        <p style="color:#f59e0b; font-weight:500;">⚠️ 该报警尚未处理</p>
+                    </div>
+                `;
+            }
+            
             body.innerHTML = `
                 <div class="detail-grid">
                     <div class="detail-item">
                         <label>冷库名称</label>
-                        <span>${alarm.storage_name}</span>
+                        <span style="font-weight:600;">${alarm.storage_name}</span>
                     </div>
                     <div class="detail-item">
                         <label>报警类型</label>
-                        <span>${alarm.alarm_type.includes('temp') ? '温度报警' : '湿度报警'}</span>
+                        <span>${alarmTypeText} ${alarmTypeDesc}</span>
                     </div>
                     <div class="detail-item">
                         <label>当前数值</label>
-                        <span>${alarm.current_value}${alarm.alarm_type.includes('temp') ? '°C' : '%'}</span>
+                        <span style="color:#dc2626; font-weight:600;">${alarm.current_value}${unit}</span>
                     </div>
                     <div class="detail-item">
                         <label>设定范围</label>
-                        <span>${alarm.threshold_min} ~ ${alarm.threshold_max}</span>
+                        <span>${alarm.threshold_min}${unit} ~ ${alarm.threshold_max}${unit}</span>
                     </div>
-                    <div class="detail-item">
+                    <div class="detail-item full-width">
                         <label>触发时间</label>
                         <span>${alarm.triggered_at}</span>
                     </div>
-                    <div class="detail-item">
-                        <label>处理人</label>
-                        <span>${alarm.handled_by || '-'}</span>
-                    </div>
-                    <div class="detail-item">
-                        <label>处理时间</label>
-                        <span>${alarm.handled_at || '-'}</span>
-                    </div>
-                    <div class="detail-item full-width">
-                        <label>处理备注</label>
-                        <span>${alarm.handled_note || '-'}</span>
-                    </div>
                     <div class="detail-item full-width">
                         <label>报警内容</label>
-                        <span>${alarm.message}</span>
+                        <span style="color:#dc2626; font-weight:500;">${alarm.message}</span>
                     </div>
                 </div>
+                ${handledSection}
             `;
             document.getElementById('alarmDetailModal').style.display = 'flex';
+        })
+        .catch(err => {
+            alert('加载报警详情失败：' + err.message);
         });
 }
 

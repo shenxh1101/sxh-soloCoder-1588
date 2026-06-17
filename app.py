@@ -438,12 +438,17 @@ def generate_report():
 
     records = query.order_by(TemperatureRecord.recorded_at).all()
 
+    export_start_date = start_time.strftime('%Y-%m-%d')
+    export_end_date = (end_time - timedelta(seconds=1)).strftime('%Y-%m-%d')
+
     if not records:
         return jsonify({
             'storage_id': storage_id,
             'report_type': report_type,
             'start_time': start_time.strftime('%Y-%m-%d %H:%M:%S'),
             'end_time': end_time.strftime('%Y-%m-%d %H:%M:%S'),
+            'export_start_date': export_start_date,
+            'export_end_date': export_end_date,
             'summary': None,
             'daily_data': []
         })
@@ -504,6 +509,8 @@ def generate_report():
         'report_type': report_type,
         'start_time': start_time.strftime('%Y-%m-%d %H:%M:%S'),
         'end_time': end_time.strftime('%Y-%m-%d %H:%M:%S'),
+        'export_start_date': export_start_date,
+        'export_end_date': export_end_date,
         'summary': summary,
         'daily_data': daily_stats
     })
@@ -555,6 +562,40 @@ def export_csv():
 def active_alarms():
     alarms = AlarmLog.query.filter_by(is_handled=False).order_by(AlarmLog.triggered_at.desc()).all()
     return jsonify([a.to_dict() for a in alarms])
+
+
+@app.route('/api/alarms/<int:alarm_id>')
+def alarm_detail(alarm_id):
+    alarm = AlarmLog.query.get_or_404(alarm_id)
+    return jsonify(alarm.to_dict())
+
+
+@app.route('/api/manual-records')
+def api_manual_records():
+    storage_id = request.args.get('storage_id', type=int)
+    hours = request.args.get('hours', 168, type=int)
+    limit = request.args.get('limit', 20, type=int)
+
+    end_time = datetime.now()
+    start_time = end_time - timedelta(hours=hours)
+
+    query = TemperatureRecord.query.filter(
+        TemperatureRecord.is_manual == True,
+        TemperatureRecord.recorded_at >= start_time,
+        TemperatureRecord.recorded_at <= end_time
+    )
+    if storage_id:
+        query = query.filter_by(storage_id=storage_id)
+
+    records = query.order_by(TemperatureRecord.recorded_at.desc()).limit(limit).all()
+
+    result = []
+    for r in records:
+        item = r.to_dict()
+        item['storage_name'] = r.storage.name if r.storage else '未知冷库'
+        result.append(item)
+
+    return jsonify(result)
 
 
 @app.route('/api/storages')
