@@ -1,0 +1,239 @@
+{% extends 'base.html' %}
+
+{% block title %}趋势图表 - 冷库温湿度监控系统{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>趋势图表</h2>
+    <p class="subtitle">查看温湿度24小时变化趋势</p>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <div class="header-row">
+            <h3>选择冷库</h3>
+            <div class="header-actions">
+                <select id="storageSelect" onchange="loadChart()" class="form-control">
+                    {% for storage in storages %}
+                    <option value="{{ storage.id }}">{{ storage.name }}</option>
+                    {% endfor %}
+                </select>
+                <select id="hoursSelect" onchange="loadChart()" class="form-control">
+                    <option value="6">最近6小时</option>
+                    <option value="12">最近12小时</option>
+                    <option value="24" selected>最近24小时</option>
+                    <option value="48">最近48小时</option>
+                    <option value="168">最近7天</option>
+                </select>
+            </div>
+        </div>
+    </div>
+    <div class="card-body">
+        <div class="chart-container">
+            <canvas id="tempChart"></canvas>
+        </div>
+        <div class="chart-container">
+            <canvas id="humidityChart"></canvas>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h3>数据导出</h3>
+    </div>
+    <div class="card-body">
+        <form id="exportForm" class="form-inline">
+            <div class="form-group">
+                <label>选择冷库</label>
+                <select id="exportStorage" name="storage_id" class="form-control">
+                    <option value="">全部冷库</option>
+                    {% for storage in storages %}
+                    <option value="{{ storage.id }}">{{ storage.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>开始日期</label>
+                <input type="date" id="startDate" name="start_date" class="form-control">
+            </div>
+            <div class="form-group">
+                <label>结束日期</label>
+                <input type="date" id="endDate" name="end_date" class="form-control">
+            </div>
+            <button type="button" onclick="exportCSV()" class="btn btn-primary">导出CSV</button>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let tempChart = null;
+let humidityChart = null;
+
+function loadChart() {
+    const storageId = document.getElementById('storageSelect').value;
+    const hours = document.getElementById('hoursSelect').value;
+
+    fetch(`/api/chart-data/${storageId}?hours=${hours}`)
+        .then(res => res.json())
+        .then(data => {
+            renderCharts(data);
+        });
+}
+
+function renderCharts(data) {
+    const ctx1 = document.getElementById('tempChart').getContext('2d');
+    const ctx2 = document.getElementById('humidityChart').getContext('2d');
+
+    if (tempChart) tempChart.destroy();
+    if (humidityChart) humidityChart.destroy();
+
+    const tempMinData = Array(data.labels.length).fill(data.temp_min);
+    const tempMaxData = Array(data.labels.length).fill(data.temp_max);
+    const humidityMinData = Array(data.labels.length).fill(data.humidity_min);
+    const humidityMaxData = Array(data.labels.length).fill(data.humidity_max);
+
+    tempChart = new Chart(ctx1, {
+        type: 'line',
+        data: {
+            labels: data.labels,
+            datasets: [
+                {
+                    label: '温度 (°C)',
+                    data: data.temperature,
+                    borderColor: '#e74c3c',
+                    backgroundColor: 'rgba(231, 76, 60, 0.1)',
+                    tension: 0.3,
+                    fill: true
+                },
+                {
+                    label: '上限',
+                    data: tempMaxData,
+                    borderColor: '#f39c12',
+                    borderDash: [5, 5],
+                    pointRadius: 0,
+                    fill: false
+                },
+                {
+                    label: '下限',
+                    data: tempMinData,
+                    borderColor: '#3498db',
+                    borderDash: [5, 5],
+                    pointRadius: 0,
+                    fill: false
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            plugins: {
+                title: {
+                    display: true,
+                    text: '温度变化趋势',
+                    font: { size: 16 }
+                },
+                legend: { position: 'top' }
+            },
+            scales: {
+                y: {
+                    title: {
+                        display: true,
+                        text: '温度 (°C)'
+                    }
+                },
+                x: {
+                    ticks: {
+                        maxTicksLimit: 12,
+                        maxRotation: 45
+                    }
+                }
+            }
+        }
+    });
+
+    humidityChart = new Chart(ctx2, {
+        type: 'line',
+        data: {
+            labels: data.labels,
+            datasets: [
+                {
+                    label: '湿度 (%)',
+                    data: data.humidity,
+                    borderColor: '#2ecc71',
+                    backgroundColor: 'rgba(46, 204, 113, 0.1)',
+                    tension: 0.3,
+                    fill: true
+                },
+                {
+                    label: '上限',
+                    data: humidityMaxData,
+                    borderColor: '#f39c12',
+                    borderDash: [5, 5],
+                    pointRadius: 0,
+                    fill: false
+                },
+                {
+                    label: '下限',
+                    data: humidityMinData,
+                    borderColor: '#3498db',
+                    borderDash: [5, 5],
+                    pointRadius: 0,
+                    fill: false
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            plugins: {
+                title: {
+                    display: true,
+                    text: '湿度变化趋势',
+                    font: { size: 16 }
+                },
+                legend: { position: 'top' }
+            },
+            scales: {
+                y: {
+                    title: {
+                        display: true,
+                        text: '湿度 (%)'
+                    }
+                },
+                x: {
+                    ticks: {
+                        maxTicksLimit: 12,
+                        maxRotation: 45
+                    }
+                }
+            }
+        }
+    });
+}
+
+function exportCSV() {
+    const storageId = document.getElementById('exportStorage').value;
+    const startDate = document.getElementById('startDate').value;
+    const endDate = document.getElementById('endDate').value;
+
+    let url = '/export/csv?';
+    if (storageId) url += `storage_id=${storageId}&`;
+    if (startDate) url += `start_date=${startDate}&`;
+    if (endDate) url += `end_date=${endDate}`;
+
+    window.location.href = url;
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    const today = new Date();
+    const lastWeek = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+    document.getElementById('endDate').value = today.toISOString().split('T')[0];
+    document.getElementById('startDate').value = lastWeek.toISOString().split('T')[0];
+    
+    loadChart();
+});
+</script>
+{% endblock %}

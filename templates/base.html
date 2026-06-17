@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}冷库温湿度监控系统{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-brand">
+                <span class="logo">❄️</span>
+                <h1>冷库温湿度监控系统</h1>
+            </div>
+            <ul class="nav-menu">
+                <li><a href="{{ url_for('index') }}" class="nav-link {% if request.endpoint == 'index' %}active{% endif %}">首页</a></li>
+                <li><a href="{{ url_for('storages') }}" class="nav-link {% if request.endpoint == 'storages' %}active{% endif %}">冷库管理</a></li>
+                <li><a href="{{ url_for('charts') }}" class="nav-link {% if request.endpoint == 'charts' %}active{% endif %}">趋势图表</a></li>
+                <li><a href="{{ url_for('manual_entry') }}" class="nav-link {% if request.endpoint == 'manual_entry' %}active{% endif %}">手动录入</a></li>
+                <li><a href="{{ url_for('alarms') }}" class="nav-link {% if request.endpoint == 'alarms' %}active{% endif %}">报警日志</a></li>
+                <li><a href="{{ url_for('reports') }}" class="nav-link {% if request.endpoint == 'reports' %}active{% endif %}">报表中心</a></li>
+            </ul>
+            <div class="alarm-indicator" id="alarmIndicator" style="display:none;">
+                <span class="alarm-blink">🚨</span>
+                <span id="alarmCount">0</span>
+            </div>
+        </div>
+    </nav>
+
+    <div class="alarm-banner" id="alarmBanner" style="display:none;">
+        <div class="alarm-banner-content">
+            <span class="alarm-icon">⚠️</span>
+            <span id="alarmBannerText">系统检测到异常</span>
+            <button class="alarm-close" onclick="document.getElementById('alarmBanner').style.display='none'">×</button>
+        </div>
+    </div>
+
+    <main class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="flash flash-{{ category }}">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+    </main>
+
+    <div class="modal" id="alarmModal" style="display:none;">
+        <div class="modal-content alarm-modal">
+            <div class="modal-header alarm-header">
+                <h2>🚨 温湿度报警</h2>
+            </div>
+            <div class="modal-body" id="alarmModalBody">
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" onclick="closeAlarmModal()">我知道了</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="handleAlarmModal" style="display:none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>处理报警</h2>
+            </div>
+            <div class="modal-body">
+                <form id="handleAlarmForm">
+                    <input type="hidden" id="handleAlarmId">
+                    <div class="form-group">
+                        <label>处理人</label>
+                        <input type="text" id="handledBy" required placeholder="请输入处理人姓名">
+                    </div>
+                    <div class="form-group">
+                        <label>处理备注</label>
+                        <textarea id="handledNote" rows="4" placeholder="请输入处理情况说明"></textarea>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeHandleAlarmModal()">取消</button>
+                <button class="btn btn-primary" onclick="submitHandleAlarm()">确认处理</button>
+            </div>
+        </div>
+    </div>
+
+    <footer class="footer">
+        <p>冷库温湿度监控系统 &copy; 2024 | 定时采集：每5分钟一次</p>
+    </footer>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

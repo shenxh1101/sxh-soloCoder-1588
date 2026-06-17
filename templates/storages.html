@@ -1,0 +1,179 @@
+{% extends 'base.html' %}
+
+{% block title %}冷库管理 - 冷库温湿度监控系统{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>冷库管理</h2>
+    <p class="subtitle">管理冷库设备及其温湿度阈值</p>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h3>添加冷库</h3>
+    </div>
+    <div class="card-body">
+        <form method="POST" action="{{ url_for('storages') }}" class="form-grid">
+            <div class="form-group">
+                <label for="name">冷库名称</label>
+                <input type="text" id="name" name="name" required placeholder="如：肉类冷库1号">
+            </div>
+            <div class="form-group">
+                <label for="temp_min">温度下限 (°C)</label>
+                <input type="number" id="temp_min" name="temp_min" step="0.1" required placeholder="-22">
+            </div>
+            <div class="form-group">
+                <label for="temp_max">温度上限 (°C)</label>
+                <input type="number" id="temp_max" name="temp_max" step="0.1" required placeholder="-18">
+            </div>
+            <div class="form-group">
+                <label for="humidity_min">湿度下限 (%)</label>
+                <input type="number" id="humidity_min" name="humidity_min" min="0" max="100" step="0.1" required placeholder="85">
+            </div>
+            <div class="form-group">
+                <label for="humidity_max">湿度上限 (%)</label>
+                <input type="number" id="humidity_max" name="humidity_max" min="0" max="100" step="0.1" required placeholder="95">
+            </div>
+            <div class="form-group form-actions">
+                <button type="submit" class="btn btn-primary">添加冷库</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h3>冷库列表</h3>
+    </div>
+    <div class="card-body">
+        {% if storages %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>冷库名称</th>
+                    <th>温度范围 (°C)</th>
+                    <th>湿度范围 (%)</th>
+                    <th>创建时间</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for storage in storages %}
+                <tr id="storage-row-{{ storage.id }}">
+                    <td>{{ storage.id }}</td>
+                    <td>{{ storage.name }}</td>
+                    <td>{{ storage.temp_min }} ~ {{ storage.temp_max }}</td>
+                    <td>{{ storage.humidity_min }} ~ {{ storage.humidity_max }}</td>
+                    <td>{{ storage.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                    <td>
+                        <button class="btn btn-small btn-secondary" onclick="editStorage({{ storage.id }})">编辑</button>
+                        <button class="btn btn-small btn-danger" onclick="deleteStorage({{ storage.id }})">删除</button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="empty-state-small">
+            <p>暂无冷库数据</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<div class="modal" id="editModal" style="display:none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>编辑冷库</h2>
+        </div>
+        <div class="modal-body">
+            <form id="editForm">
+                <input type="hidden" id="editId">
+                <div class="form-group">
+                    <label>冷库名称</label>
+                    <input type="text" id="editName" required>
+                </div>
+                <div class="form-group">
+                    <label>温度下限 (°C)</label>
+                    <input type="number" id="editTempMin" step="0.1" required>
+                </div>
+                <div class="form-group">
+                    <label>温度上限 (°C)</label>
+                    <input type="number" id="editTempMax" step="0.1" required>
+                </div>
+                <div class="form-group">
+                    <label>湿度下限 (%)</label>
+                    <input type="number" id="editHumidityMin" step="0.1" required>
+                </div>
+                <div class="form-group">
+                    <label>湿度上限 (%)</label>
+                    <input type="number" id="editHumidityMax" step="0.1" required>
+                </div>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeEditModal()">取消</button>
+            <button class="btn btn-primary" onclick="submitEdit()">保存</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const storages = {{ storages|tojson }};
+const storageMap = {};
+storages.forEach(s => storageMap[s.id] = s);
+
+function editStorage(id) {
+    const storage = storageMap[id];
+    document.getElementById('editId').value = storage.id;
+    document.getElementById('editName').value = storage.name;
+    document.getElementById('editTempMin').value = storage.temp_min;
+    document.getElementById('editTempMax').value = storage.temp_max;
+    document.getElementById('editHumidityMin').value = storage.humidity_min;
+    document.getElementById('editHumidityMax').value = storage.humidity_max;
+    document.getElementById('editModal').style.display = 'flex';
+}
+
+function closeEditModal() {
+    document.getElementById('editModal').style.display = 'none';
+}
+
+function submitEdit() {
+    const id = document.getElementById('editId').value;
+    const data = {
+        name: document.getElementById('editName').value,
+        temp_min: parseFloat(document.getElementById('editTempMin').value),
+        temp_max: parseFloat(document.getElementById('editTempMax').value),
+        humidity_min: parseFloat(document.getElementById('editHumidityMin').value),
+        humidity_max: parseFloat(document.getElementById('editHumidityMax').value)
+    };
+
+    fetch(`/storages/${id}`, {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data)
+    }).then(res => res.json())
+      .then(data => {
+          if (data.status === 'success') {
+              location.reload();
+          }
+      });
+}
+
+function deleteStorage(id) {
+    if (confirm('确定要删除这个冷库吗？相关的历史数据也会被删除。')) {
+        fetch(`/storages/${id}`, {
+            method: 'DELETE'
+        }).then(res => res.json())
+          .then(data => {
+              if (data.status === 'success') {
+                  document.getElementById(`storage-row-${id}`).remove();
+              }
+          });
+    }
+}
+</script>
+{% endblock %}

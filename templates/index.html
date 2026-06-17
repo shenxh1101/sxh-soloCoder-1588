@@ -1,0 +1,160 @@
+{% extends 'base.html' %}
+
+{% block title %}首页 - 冷库温湿度监控系统{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>监控总览</h2>
+    <p class="subtitle">实时监控各冷库温湿度状态</p>
+</div>
+
+{% if active_alarms %}
+<div class="warning-box">
+    <h3>⚠️ 当前未处理报警 ({{ active_alarms|length }})</h3>
+    <div class="alarm-list">
+        {% for alarm in active_alarms %}
+        <div class="alarm-item">
+            <span class="alarm-type">{{ '温度' if 'temp' in alarm.alarm_type else '湿度' }}</span>
+            <strong>{{ alarm.storage.name }}</strong>
+            <span>{{ alarm.message }}</span>
+            <span class="alarm-time">{{ alarm.triggered_at.strftime('%m-%d %H:%M') }}</span>
+            <button class="btn btn-small btn-primary" onclick="openHandleAlarmModal({{ alarm.id }})">处理</button>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-icon blue">🏭</div>
+        <div class="stat-info">
+            <h3>{{ storages|length }}</h3>
+            <p>冷库总数</p>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon red">🚨</div>
+        <div class="stat-info">
+            <h3>{{ active_alarms|length }}</h3>
+            <p>待处理报警</p>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon green">📊</div>
+        <div class="stat-info">
+            <h3 id="recordsToday">0</h3>
+            <p>今日记录数</p>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon orange">⏱️</div>
+        <div class="stat-info">
+            <h3>5分钟</h3>
+            <p>采集间隔</p>
+        </div>
+    </div>
+</div>
+
+<div class="storage-grid">
+    {% for storage in storages %}
+    <div class="storage-card" id="storage-{{ storage.id }}">
+        <div class="storage-header">
+            <h3>{{ storage.name }}</h3>
+            <span class="storage-status" id="status-{{ storage.id }}">加载中...</span>
+        </div>
+        <div class="storage-body">
+            <div class="reading">
+                <div class="reading-label">🌡️ 温度</div>
+                <div class="reading-value" id="temp-{{ storage.id }}">--°C</div>
+                <div class="reading-range">设定: {{ storage.temp_min }} ~ {{ storage.temp_max }}°C</div>
+            </div>
+            <div class="reading">
+                <div class="reading-label">💧 湿度</div>
+                <div class="reading-value" id="humidity-{{ storage.id }}">--%</div>
+                <div class="reading-range">设定: {{ storage.humidity_min }} ~ {{ storage.humidity_max }}%</div>
+            </div>
+        </div>
+        <div class="storage-footer">
+            <span class="last-update" id="update-{{ storage.id }}">更新中...</span>
+            <a href="{{ url_for('charts') }}" class="btn btn-small btn-secondary">查看图表</a>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+{% if not storages %}
+<div class="empty-state">
+    <div class="empty-icon">🏭</div>
+    <h3>暂无冷库</h3>
+    <p>请先添加冷库以开始监控</p>
+    <a href="{{ url_for('storages') }}" class="btn btn-primary">添加冷库</a>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+function updateStorageData() {
+    const storages = {{ storages|tojson }};
+    storages.forEach(storage => {
+        fetch(`/storages/${storage.id}?hours=1`)
+            .then(res => res.json())
+            .then(data => {
+                const records = data.records;
+                if (records.length > 0) {
+                    const latest = records[records.length - 1];
+                    const temp = parseFloat(latest.temperature);
+                    const humidity = parseFloat(latest.humidity);
+                    
+                    document.getElementById(`temp-${storage.id}`).textContent = temp + '°C';
+                    document.getElementById(`humidity-${storage.id}`).textContent = humidity + '%';
+                    document.getElementById(`update-${storage.id}`).textContent = '更新: ' + latest.recorded_at;
+                    
+                    const tempOk = temp >= storage.temp_min && temp <= storage.temp_max;
+                    const humidityOk = humidity >= storage.humidity_min && humidity <= storage.humidity_max;
+                    
+                    const tempEl = document.getElementById(`temp-${storage.id}`);
+                    const humidityEl = document.getElementById(`humidity-${storage.id}`);
+                    const statusEl = document.getElementById(`status-${storage.id}`);
+                    const cardEl = document.getElementById(`storage-${storage.id}`);
+                    
+                    tempEl.className = 'reading-value' + (tempOk ? '' : ' danger');
+                    humidityEl.className = 'reading-value' + (humidityOk ? '' : ' danger');
+                    
+                    if (tempOk && humidityOk) {
+                        statusEl.textContent = '正常';
+                        statusEl.className = 'storage-status status-normal';
+                        cardEl.classList.remove('card-alarm');
+                    } else {
+                        statusEl.textContent = '异常';
+                        statusEl.className = 'storage-status status-alarm';
+                        cardEl.classList.add('card-alarm');
+                    }
+                }
+            });
+    });
+}
+
+function updateRecordsToday() {
+    const today = new Date().toISOString().split('T')[0];
+    let count = 0;
+    const storages = {{ storages|tojson }};
+    storages.forEach(storage => {
+        fetch(`/storages/${storage.id}?hours=24`)
+            .then(res => res.json())
+            .then(data => {
+                count += data.records.filter(r => r.recorded_at.startsWith(today)).length;
+                document.getElementById('recordsToday').textContent = count;
+            });
+    });
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    updateStorageData();
+    updateRecordsToday();
+    setInterval(updateStorageData, 30000);
+    setInterval(checkActiveAlarms, 10000);
+});
+</script>
+{% endblock %}

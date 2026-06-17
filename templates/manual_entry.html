@@ -1,0 +1,118 @@
+{% extends 'base.html' %}
+
+{% block title %}手动录入 - 冷库温湿度监控系统{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>手动录入</h2>
+    <p class="subtitle">用于导入历史纸质记录</p>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h3>录入温湿度数据</h3>
+    </div>
+    <div class="card-body">
+        <form method="POST" action="{{ url_for('manual_entry') }}" class="form-grid">
+            <div class="form-group">
+                <label for="storage_id">选择冷库</label>
+                <select id="storage_id" name="storage_id" required>
+                    <option value="">请选择冷库</option>
+                    {% for storage in storages %}
+                    <option value="{{ storage.id }}">{{ storage.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="temperature">温度 (°C)</label>
+                <input type="number" id="temperature" name="temperature" step="0.1" required placeholder="-20">
+            </div>
+            <div class="form-group">
+                <label for="humidity">湿度 (%)</label>
+                <input type="number" id="humidity" name="humidity" step="0.1" min="0" max="100" required placeholder="90">
+            </div>
+            <div class="form-group">
+                <label for="recorded_at">记录时间</label>
+                <input type="datetime-local" id="recorded_at" name="recorded_at">
+            </div>
+            <div class="form-group form-actions">
+                <button type="submit" class="btn btn-primary">提交</button>
+            </div>
+        </form>
+        <p class="help-text">
+            <small>提示：记录时间留空则使用当前时间</small>
+        </p>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h3>批量录入说明</h3>
+    </div>
+    <div class="card-body">
+        <div class="instructions">
+            <h4>📝 使用场景</h4>
+            <ul>
+                <li>导入历史纸质记录的温湿度数据</li>
+                <li>补录系统停机期间的数据</li>
+                <li>校准传感器时的对比数据录入</li>
+            </ul>
+            <h4>⚠️ 注意事项</h4>
+            <ul>
+                <li>手动录入的数据会标记为"手动录入"，在报表中会有标识</li>
+                <li>录入的数据同样会进行报警检查，超出范围会触发报警</li>
+                <li>请确保录入数据的准确性</li>
+            </ul>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h3>最近手动录入记录</h3>
+    </div>
+    <div class="card-body">
+        <div id="manualRecords">
+            <p class="text-muted">加载中...</p>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const now = new Date();
+    now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+    document.getElementById('recorded_at').value = now.toISOString().slice(0, 16);
+
+    loadManualRecords();
+});
+
+function loadManualRecords() {
+    const storageId = document.getElementById('storage_id').value;
+    if (!storageId) {
+        fetch(`/storages/${storageId}?hours=168`)
+            .then(res => res.json())
+            .then(data => {
+                const manualRecords = data.records.filter(r => r.is_manual);
+                const container = document.getElementById('manualRecords');
+                
+                if (manualRecords.length === 0) {
+                    container.innerHTML = '<p class="text-muted">暂无手动录入记录</p>';
+                    return;
+                }
+
+                let html = '<table class="data-table"><thead><tr><th>时间</th><th>温度(°C)</th><th>湿度(%)</th></tr></thead><tbody>';
+                manualRecords.slice(-10).reverse().forEach(r => {
+                    html += `<tr><td>${r.recorded_at}</td><td>${r.temperature}</td><td>${r.humidity}</td></tr>`;
+                });
+                html += '</tbody></table>';
+                container.innerHTML = html;
+            });
+    }
+}
+
+document.getElementById('storage_id').addEventListener('change', loadManualRecords);
+</script>
+{% endblock %}

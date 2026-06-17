@@ -1,0 +1,230 @@
+{% extends 'base.html' %}
+
+{% block title %}报表中心 - 冷库温湿度监控系统{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>报表中心</h2>
+    <p class="subtitle">生成每日、每周温湿度报表</p>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h3>生成报表</h3>
+    </div>
+    <div class="card-body">
+        <form id="reportForm" class="form-inline">
+            <div class="form-group">
+                <label>选择冷库</label>
+                <select id="reportStorage" name="storage_id" class="form-control">
+                    <option value="">全部冷库</option>
+                    {% for storage in storages %}
+                    <option value="{{ storage.id }}">{{ storage.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>报表类型</label>
+                <select id="reportType" name="type" class="form-control">
+                    <option value="daily">日报表</option>
+                    <option value="weekly">周报表</option>
+                    <option value="custom">自定义</option>
+                </select>
+            </div>
+            <div id="customDateRange" style="display:none;">
+                <div class="form-group">
+                    <label>开始日期</label>
+                    <input type="date" id="reportStartDate" name="start_date" class="form-control">
+                </div>
+                <div class="form-group">
+                    <label>结束日期</label>
+                    <input type="date" id="reportEndDate" name="end_date" class="form-control">
+                </div>
+            </div>
+            <button type="button" onclick="generateReport()" class="btn btn-primary">生成报表</button>
+        </form>
+    </div>
+</div>
+
+<div id="reportResult" style="display:none;">
+    <div class="card">
+        <div class="card-header">
+            <div class="header-row">
+                <h3>报表结果</h3>
+                <div class="header-actions">
+                    <button onclick="printReport()" class="btn btn-secondary">打印报表</button>
+                    <button onclick="exportReportCSV()" class="btn btn-primary">导出CSV</button>
+                </div>
+            </div>
+        </div>
+        <div class="card-body" id="reportBody">
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h3>报表说明</h3>
+    </div>
+    <div class="card-body">
+        <div class="instructions">
+            <h4>📊 报表内容</h4>
+            <ul>
+                <li><strong>统计概览：</strong>记录总数、报警次数、温湿度平均值/最大值/最小值</li>
+                <li><strong>每日统计：</strong>按天展示温湿度统计数据</li>
+                <li><strong>数据范围：</strong>可选择单个冷库或全部冷库</li>
+            </ul>
+            <h4>📅 报表类型</h4>
+            <ul>
+                <li><strong>日报表：</strong>最近24小时数据统计</li>
+                <li><strong>周报表：</strong>最近7天数据统计</li>
+                <li><strong>自定义：</strong>自定义日期范围</li>
+            </ul>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentReportParams = {};
+
+document.getElementById('reportType').addEventListener('change', function() {
+    const customRange = document.getElementById('customDateRange');
+    if (this.value === 'custom') {
+        customRange.style.display = 'flex';
+    } else {
+        customRange.style.display = 'none';
+    }
+});
+
+function generateReport() {
+    const storageId = document.getElementById('reportStorage').value;
+    const reportType = document.getElementById('reportType').value;
+    const startDate = document.getElementById('reportStartDate').value;
+    const endDate = document.getElementById('reportEndDate').value;
+
+    currentReportParams = { storage_id: storageId, type: reportType };
+    if (reportType === 'custom') {
+        currentReportParams.start_date = startDate;
+        currentReportParams.end_date = endDate;
+    }
+
+    let url = '/api/report?';
+    Object.keys(currentReportParams).forEach(key => {
+        if (currentReportParams[key]) {
+            url += `${key}=${currentReportParams[key]}&`;
+        }
+    });
+
+    fetch(url)
+        .then(res => res.json())
+        .then(data => {
+            renderReport(data);
+        });
+}
+
+function renderReport(data) {
+    const resultDiv = document.getElementById('reportResult');
+    const body = document.getElementById('reportBody');
+
+    if (!data.summary) {
+        body.innerHTML = '<div class="empty-state-small"><p>该时间段内没有数据</p></div>';
+        resultDiv.style.display = 'block';
+        return;
+    }
+
+    let html = `
+        <div class="report-summary">
+            <div class="report-meta">
+                <p><strong>冷库：</strong>${data.storage_name}</p>
+                <p><strong>报表类型：</strong>${data.report_type === 'daily' ? '日报表' : data.report_type === 'weekly' ? '周报表' : '自定义'}</p>
+                <p><strong>时间范围：</strong>${data.start_time} 至 ${data.end_time}</p>
+            </div>
+            <div class="summary-cards">
+                <div class="summary-card">
+                    <div class="summary-label">记录总数</div>
+                    <div class="summary-value">${data.summary.total_records}</div>
+                </div>
+                <div class="summary-card">
+                    <div class="summary-label">报警次数</div>
+                    <div class="summary-value alarm">${data.summary.alarm_count}</div>
+                </div>
+                <div class="summary-card">
+                    <div class="summary-label">平均温度</div>
+                    <div class="summary-value">${data.summary.temperature.avg}°C</div>
+                </div>
+                <div class="summary-card">
+                    <div class="summary-label">温度范围</div>
+                    <div class="summary-value">${data.summary.temperature.min} ~ ${data.summary.temperature.max}°C</div>
+                </div>
+                <div class="summary-card">
+                    <div class="summary-label">平均湿度</div>
+                    <div class="summary-value">${data.summary.humidity.avg}%</div>
+                </div>
+                <div class="summary-card">
+                    <div class="summary-label">湿度范围</div>
+                    <div class="summary-value">${data.summary.humidity.min} ~ ${data.summary.humidity.max}%</div>
+                </div>
+            </div>
+        </div>
+
+        <h4 style="margin-top: 2rem;">每日统计明细</h4>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>日期</th>
+                    <th>记录数</th>
+                    <th>平均温度</th>
+                    <th>最高温度</th>
+                    <th>最低温度</th>
+                    <th>平均湿度</th>
+                    <th>最高湿度</th>
+                    <th>最低湿度</th>
+                </tr>
+            </thead>
+            <tbody>
+    `;
+
+    data.daily_data.forEach(day => {
+        html += `
+            <tr>
+                <td>${day.date}</td>
+                <td>${day.record_count}</td>
+                <td>${day.temperature.avg}°C</td>
+                <td class="${day.temperature.max > data.summary.temperature.avg ? 'value-high' : ''}">${day.temperature.max}°C</td>
+                <td class="${day.temperature.min < data.summary.temperature.avg ? 'value-low' : ''}">${day.temperature.min}°C</td>
+                <td>${day.humidity.avg}%</td>
+                <td class="${day.humidity.max > data.summary.humidity.avg ? 'value-high' : ''}">${day.humidity.max}%</td>
+                <td class="${day.humidity.min < data.summary.humidity.avg ? 'value-low' : ''}">${day.humidity.min}%</td>
+            </tr>
+        `;
+    });
+
+    html += '</tbody></table>';
+    body.innerHTML = html;
+    resultDiv.style.display = 'block';
+}
+
+function printReport() {
+    window.print();
+}
+
+function exportReportCSV() {
+    let url = '/export/csv?';
+    Object.keys(currentReportParams).forEach(key => {
+        if (currentReportParams[key] && key !== 'type') {
+            url += `${key}=${currentReportParams[key]}&`;
+        }
+    });
+    window.location.href = url;
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    const today = new Date();
+    const lastWeek = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+    document.getElementById('reportEndDate').value = today.toISOString().split('T')[0];
+    document.getElementById('reportStartDate').value = lastWeek.toISOString().split('T')[0];
+});
+</script>
+{% endblock %}

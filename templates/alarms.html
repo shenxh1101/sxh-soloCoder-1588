@@ -1,0 +1,185 @@
+{% extends 'base.html' %}
+
+{% block title %}报警日志 - 冷库温湿度监控系统{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>报警日志</h2>
+    <p class="subtitle">查看和处理所有报警记录</p>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <div class="header-row">
+            <h3>报警列表</h3>
+            <div class="header-actions">
+                <span class="badge badge-warning">未处理: {{ alarms|selectattr('is_handled', 'equalto', false)|list|length }}</span>
+                <span class="badge badge-success">已处理: {{ alarms|selectattr('is_handled', 'equalto', true)|list|length }}</span>
+            </div>
+        </div>
+    </div>
+    <div class="card-body">
+        {% if alarms %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>冷库名称</th>
+                    <th>报警类型</th>
+                    <th>报警内容</th>
+                    <th>当前值</th>
+                    <th>触发时间</th>
+                    <th>状态</th>
+                    <th>处理人</th>
+                    <th>处理时间</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for alarm in alarms %}
+                <tr class="{{ 'alarm-unhandled' if not alarm.is_handled else '' }}">
+                    <td>{{ alarm.id }}</td>
+                    <td>{{ alarm.storage.name }}</td>
+                    <td>
+                        <span class="type-badge type-{{ alarm.alarm_type }}">
+                            {% if 'temp' in alarm.alarm_type %}
+                                🌡️ 温度
+                            {% else %}
+                                💧 湿度
+                            {% endif %}
+                        </span>
+                    </td>
+                    <td>{{ alarm.message }}</td>
+                    <td>
+                        {% if 'temp' in alarm.alarm_type %}
+                            {{ alarm.current_value }}°C
+                        {% else %}
+                            {{ alarm.current_value }}%
+                        {% endif %}
+                    </td>
+                    <td>{{ alarm.triggered_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                    <td>
+                        {% if alarm.is_handled %}
+                            <span class="status-badge status-handled">已处理</span>
+                        {% else %}
+                            <span class="status-badge status-pending">待处理</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ alarm.handled_by or '-' }}</td>
+                    <td>{{ alarm.handled_at.strftime('%Y-%m-%d %H:%M:%S') if alarm.handled_at else '-' }}</td>
+                    <td>
+                        {% if not alarm.is_handled %}
+                        <button class="btn btn-small btn-primary" onclick="openHandleAlarmModal({{ alarm.id }})">处理</button>
+                        {% else %}
+                        <button class="btn btn-small btn-secondary" onclick="viewAlarmDetail({{ alarm.id }})">详情</button>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        {% if pagination.pages > 1 %}
+        <div class="pagination">
+            {% if pagination.has_prev %}
+            <a href="{{ url_for('alarms', page=pagination.prev_num) }}" class="page-link">&laquo; 上一页</a>
+            {% endif %}
+            
+            {% for page_num in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
+                {% if page_num %}
+                    {% if pagination.page == page_num %}
+                    <span class="page-link active">{{ page_num }}</span>
+                    {% else %}
+                    <a href="{{ url_for('alarms', page=page_num) }}" class="page-link">{{ page_num }}</a>
+                    {% endif %}
+                {% else %}
+                    <span class="page-link">...</span>
+                {% endif %}
+            {% endfor %}
+            
+            {% if pagination.has_next %}
+            <a href="{{ url_for('alarms', page=pagination.next_num) }}" class="page-link">下一页 &raquo;</a>
+            {% endif %}
+        </div>
+        {% endif %}
+        {% else %}
+        <div class="empty-state-small">
+            <p>暂无报警记录</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<div class="modal" id="alarmDetailModal" style="display:none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>报警详情</h2>
+        </div>
+        <div class="modal-body" id="alarmDetailBody">
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeDetailModal()">关闭</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function viewAlarmDetail(id) {
+    fetch('/api/active-alarms')
+        .then(res => res.json())
+        .then(alarms => {
+            const alarm = alarms.find(a => a.id === id);
+            if (!alarm) return;
+            
+            const body = document.getElementById('alarmDetailBody');
+            body.innerHTML = `
+                <div class="detail-grid">
+                    <div class="detail-item">
+                        <label>冷库名称</label>
+                        <span>${alarm.storage_name}</span>
+                    </div>
+                    <div class="detail-item">
+                        <label>报警类型</label>
+                        <span>${alarm.alarm_type.includes('temp') ? '温度报警' : '湿度报警'}</span>
+                    </div>
+                    <div class="detail-item">
+                        <label>当前数值</label>
+                        <span>${alarm.current_value}${alarm.alarm_type.includes('temp') ? '°C' : '%'}</span>
+                    </div>
+                    <div class="detail-item">
+                        <label>设定范围</label>
+                        <span>${alarm.threshold_min} ~ ${alarm.threshold_max}</span>
+                    </div>
+                    <div class="detail-item">
+                        <label>触发时间</label>
+                        <span>${alarm.triggered_at}</span>
+                    </div>
+                    <div class="detail-item">
+                        <label>处理人</label>
+                        <span>${alarm.handled_by || '-'}</span>
+                    </div>
+                    <div class="detail-item">
+                        <label>处理时间</label>
+                        <span>${alarm.handled_at || '-'}</span>
+                    </div>
+                    <div class="detail-item full-width">
+                        <label>处理备注</label>
+                        <span>${alarm.handled_note || '-'}</span>
+                    </div>
+                    <div class="detail-item full-width">
+                        <label>报警内容</label>
+                        <span>${alarm.message}</span>
+                    </div>
+                </div>
+            `;
+            document.getElementById('alarmDetailModal').style.display = 'flex';
+        });
+}
+
+function closeDetailModal() {
+    document.getElementById('alarmDetailModal').style.display = 'none';
+}
+</script>
+{% endblock %}
