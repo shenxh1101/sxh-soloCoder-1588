@@ -5,7 +5,7 @@
 {% block content %}
 <div class="page-header">
     <h2>报表中心</h2>
-    <p class="subtitle">生成每日、每周温湿度报表</p>
+    <p class="subtitle">生成每日、每周温湿度报表，多冷库对比分析</p>
 </div>
 
 <div class="card">
@@ -17,7 +17,7 @@
             <div class="form-group">
                 <label>选择冷库</label>
                 <select id="reportStorage" name="storage_id" class="form-control">
-                    <option value="">全部冷库</option>
+                    <option value="">全部冷库（对比视图）</option>
                     {% for storage in storages %}
                     <option value="{{ storage.id }}">{{ storage.name }}</option>
                     {% endfor %}
@@ -26,9 +26,9 @@
             <div class="form-group">
                 <label>报表类型</label>
                 <select id="reportType" name="type" class="form-control">
-                    <option value="daily">日报表</option>
-                    <option value="weekly">周报表</option>
-                    <option value="custom">自定义</option>
+                    <option value="daily">日报表（最近24小时）</option>
+                    <option value="weekly">周报表（最近7天）</option>
+                    <option value="custom">自定义日期</option>
                 </select>
             </div>
             <div id="customDateRange" style="display:none;">
@@ -50,9 +50,9 @@
     <div class="card">
         <div class="card-header">
             <div class="header-row">
-                <h3>报表结果</h3>
+                <h3 id="reportTitle">报表结果</h3>
                 <div class="header-actions">
-                    <button onclick="printReport()" class="btn btn-secondary">打印报表</button>
+                    <button onclick="printReport()" class="btn btn-secondary">打印</button>
                     <button onclick="exportReportCSV()" class="btn btn-primary">导出CSV</button>
                 </div>
             </div>
@@ -68,11 +68,17 @@
     </div>
     <div class="card-body">
         <div class="instructions">
-            <h4>📊 报表内容</h4>
+            <h4>📊 单冷库报表</h4>
             <ul>
                 <li><strong>统计概览：</strong>记录总数、报警次数、温湿度平均值/最大值/最小值</li>
                 <li><strong>每日统计：</strong>按天展示温湿度统计数据</li>
-                <li><strong>数据范围：</strong>可选择单个冷库或全部冷库</li>
+                <li><strong>导出CSV：</strong>精确包含报表卡片显示的那一段数据（精确到秒）</li>
+            </ul>
+            <h4>📈 全部冷库对比视图</h4>
+            <ul>
+                <li><strong>稳定性排行：</strong>根据波动标准差 + 报警次数综合打分，越高越不稳定</li>
+                <li><strong>报警次数：</strong>统计时间范围内触发的报警总数</li>
+                <li><strong>超限次数：</strong>温湿度超出设定范围的记录条数</li>
             </ul>
             <h4>📅 报表类型</h4>
             <ul>
@@ -111,6 +117,14 @@ function generateReport() {
         currentReportParams.end_date = endDate;
     }
 
+    if (storageId === '') {
+        generateCompareReport();
+    } else {
+        generateSingleReport();
+    }
+}
+
+function generateSingleReport() {
     let url = '/api/report?';
     Object.keys(currentReportParams).forEach(key => {
         if (currentReportParams[key]) {
@@ -122,16 +136,43 @@ function generateReport() {
         .then(res => res.json())
         .then(data => {
             lastReportData = data;
-            renderReport(data);
+            lastReportData.report_mode = 'single';
+            document.getElementById('reportTitle').textContent = `${data.storage_name} - ${reportTypeLabel(data.report_type)}`;
+            renderSingleReport(data);
         });
 }
 
-function renderReport(data) {
+function generateCompareReport() {
+    let url = '/api/report/compare?';
+    Object.keys(currentReportParams).forEach(key => {
+        if (currentReportParams[key]) {
+            url += `${key}=${currentReportParams[key]}&`;
+        }
+    });
+
+    fetch(url)
+        .then(res => res.json())
+        .then(data => {
+            lastReportData = data;
+            lastReportData.report_mode = 'compare';
+            document.getElementById('reportTitle').textContent = `全部冷库对比 - ${reportTypeLabel(currentReportParams.type)}`;
+            renderCompareReport(data);
+        });
+}
+
+function reportTypeLabel(type) {
+    const map = { daily: '日报表', weekly: '周报表', custom: '自定义报表' };
+    return map[type] || type;
+}
+
+function renderSingleReport(data) {
     const resultDiv = document.getElementById('reportResult');
     const body = document.getElementById('reportBody');
 
     if (!data.summary) {
-        body.innerHTML = '<div class="empty-state-small"><p>该时间段内没有数据</p></div>';
+        body.innerHTML = `<div class="empty-state-small">
+            <p>该时间段内没有数据（${data.start_time} ~ ${data.end_time}）</p>
+        </div>`;
         resultDiv.style.display = 'block';
         return;
     }
@@ -140,8 +181,11 @@ function renderReport(data) {
         <div class="report-summary">
             <div class="report-meta">
                 <p><strong>冷库：</strong>${data.storage_name}</p>
-                <p><strong>报表类型：</strong>${data.report_type === 'daily' ? '日报表' : data.report_type === 'weekly' ? '周报表' : '自定义'}</p>
+                <p><strong>报表类型：</strong>${reportTypeLabel(data.report_type)}</p>
                 <p><strong>时间范围：</strong>${data.start_time} 至 ${data.end_time}</p>
+                <p style="color:#64748b; font-size:0.8125rem;">
+                    <em>导出CSV将严格按照此时间范围（精确到秒），不多不少</em>
+                </p>
             </div>
             <div class="summary-cards">
                 <div class="summary-card">
@@ -208,6 +252,124 @@ function renderReport(data) {
     resultDiv.style.display = 'block';
 }
 
+function renderCompareReport(data) {
+    const resultDiv = document.getElementById('reportResult');
+    const body = document.getElementById('reportBody');
+
+    if (!data.storages || data.storages.length === 0) {
+        body.innerHTML = `<div class="empty-state-small">
+            <p>该时间段内没有数据（${data.start_time} ~ ${data.end_time}）</p>
+        </div>`;
+        resultDiv.style.display = 'block';
+        return;
+    }
+
+    const worst = data.storages[0];
+    const best = data.storages[data.storages.length - 1];
+
+    let html = `
+        <div class="report-summary">
+            <div class="report-meta">
+                <p><strong>冷库：</strong>全部冷库（共 ${data.storages.length} 个）</p>
+                <p><strong>报表类型：</strong>${reportTypeLabel(currentReportParams.type)}</p>
+                <p><strong>时间范围：</strong>${data.start_time} 至 ${data.end_time}</p>
+            </div>
+            <div class="summary-cards">
+                <div class="summary-card">
+                    <div class="summary-label">最不稳定</div>
+                    <div class="summary-value" style="font-size:1rem;">⚠️ ${worst.storage_name}</div>
+                    <div style="font-size:0.75rem; opacity:0.9; margin-top:0.25rem;">不稳定分: ${worst.instability_score}</div>
+                </div>
+                <div class="summary-card">
+                    <div class="summary-label">最稳定</div>
+                    <div class="summary-value" style="font-size:1rem;">✅ ${best.storage_name}</div>
+                    <div style="font-size:0.75rem; opacity:0.9; margin-top:0.25rem;">不稳定分: ${best.instability_score}</div>
+                </div>
+                <div class="summary-card">
+                    <div class="summary-label">总报警次数</div>
+                    <div class="summary-value alarm">${data.storages.reduce((s, x) => s + x.alarm_count, 0)}</div>
+                </div>
+                <div class="summary-card">
+                    <div class="summary-label">总记录数</div>
+                    <div class="summary-value">${data.storages.reduce((s, x) => s + x.total_records, 0)}</div>
+                </div>
+            </div>
+        </div>
+
+        <h4 style="margin-top: 2rem;">冷库对比排行（按稳定性从差到好）</h4>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>排名</th>
+                    <th>冷库名称</th>
+                    <th>记录数</th>
+                    <th>平均温度</th>
+                    <th>平均湿度</th>
+                    <th>温度超限</th>
+                    <th>湿度超限</th>
+                    <th>报警次数</th>
+                    <th>不稳定分</th>
+                </tr>
+            </thead>
+            <tbody>
+    `;
+
+    data.storages.forEach(s => {
+        const rankClass = s.rank === 1 ? 'value-high' : (s.rank === data.storages.length ? 'value-low' : '');
+        const rankBadge = s.rank === 1 ? '🥇' : (s.rank === 2 ? '🥈' : (s.rank === 3 ? '🥉' : `#${s.rank}`));
+        html += `
+            <tr class="${s.rank === 1 ? 'alarm-unhandled' : ''}">
+                <td class="${rankClass}" style="font-weight:700;">${rankBadge}</td>
+                <td style="font-weight:600;">${s.storage_name}</td>
+                <td>${s.total_records}</td>
+                <td>${s.temp_avg}°C</td>
+                <td>${s.humidity_avg}%</td>
+                <td class="${s.temp_violations > 0 ? 'value-high' : ''}">${s.temp_violations}</td>
+                <td class="${s.humidity_violations > 0 ? 'value-high' : ''}">${s.humidity_violations}</td>
+                <td class="${s.alarm_count > 0 ? 'value-high' : ''}" style="font-weight:600;">${s.alarm_count}</td>
+                <td style="font-weight:700;" class="${s.instability_score > 10 ? 'value-high' : ''}">${s.instability_score}</td>
+            </tr>
+        `;
+    });
+
+    html += `
+            </tbody>
+        </table>
+        <div style="margin-top: 1rem;">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>冷库名称</th>
+                        <th>温度范围</th>
+                        <th>最高温度</th>
+                        <th>最低温度</th>
+                        <th>湿度范围</th>
+                        <th>最高湿度</th>
+                        <th>最低湿度</th>
+                    </tr>
+                </thead>
+                <tbody>
+    `;
+
+    data.storages.forEach(s => {
+        html += `
+            <tr>
+                <td style="font-weight:600;">${s.storage_name}</td>
+                <td>${s.temp_range}</td>
+                <td class="value-high">${s.temp_max ?? '-'}</td>
+                <td class="value-low">${s.temp_min ?? '-'}</td>
+                <td>${s.humidity_range}</td>
+                <td class="value-high">${s.humidity_max ?? '-'}</td>
+                <td class="value-low">${s.humidity_min ?? '-'}</td>
+            </tr>
+        `;
+    });
+
+    html += '</tbody></table></div>';
+    body.innerHTML = html;
+    resultDiv.style.display = 'block';
+}
+
 function printReport() {
     window.print();
 }
@@ -219,13 +381,18 @@ function exportReportCSV() {
     }
 
     let url = '/export/csv?';
-    if (lastReportData.storage_id) {
-        url += `storage_id=${lastReportData.storage_id}&`;
+
+    if (lastReportData.report_mode === 'single') {
+        if (lastReportData.storage_id) {
+            url += `storage_id=${lastReportData.storage_id}&`;
+        }
+        url += `start=${encodeURIComponent(lastReportData.export_start)}&end=${encodeURIComponent(lastReportData.export_end)}`;
+    } else {
+        url += `start=${encodeURIComponent(lastReportData.start_time)}&end=${encodeURIComponent(lastReportData.end_time)}`;
     }
-    url += `start_date=${lastReportData.export_start_date}&end_date=${lastReportData.export_end_date}`;
 
     console.log('导出CSV URL:', url);
-    console.log('报表范围:', lastReportData.start_time, '~', lastReportData.end_time);
+    console.log('精确时间范围:', lastReportData.start_time, '~', lastReportData.end_time);
     window.location.href = url;
 }
 

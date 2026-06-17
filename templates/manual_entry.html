@@ -5,12 +5,12 @@
 {% block content %}
 <div class="page-header">
     <h2>手动录入</h2>
-    <p class="subtitle">用于导入历史纸质记录</p>
+    <p class="subtitle">单条录入或批量导入历史记录</p>
 </div>
 
 <div class="card">
     <div class="card-header">
-        <h3>录入温湿度数据</h3>
+        <h3>单条录入</h3>
     </div>
     <div class="card-body">
         <form method="POST" action="{{ url_for('manual_entry') }}" class="form-grid">
@@ -39,37 +39,82 @@
                 <button type="submit" class="btn btn-primary">提交</button>
             </div>
         </form>
-        <p class="help-text">
-            <small>提示：记录时间留空则使用当前时间</small>
-        </p>
+        <p class="help-text"><small>提示：记录时间留空则使用当前时间</small></p>
     </div>
 </div>
 
 <div class="card">
     <div class="card-header">
-        <h3>批量录入说明</h3>
+        <div class="header-row">
+            <h3>批量粘贴导入</h3>
+            <div class="header-actions">
+                <button type="button" onclick="fillDemoData()" class="btn btn-secondary">填入示例</button>
+                <button type="button" onclick="clearBatchForm()" class="btn btn-secondary">清空</button>
+            </div>
+        </div>
     </div>
     <div class="card-body">
-        <div class="instructions">
-            <h4>📝 使用场景</h4>
+        <div class="form-group">
+            <label for="batchStorage">目标冷库</label>
+            <select id="batchStorage" class="form-control">
+                <option value="">请选择冷库</option>
+                {% for storage in storages %}
+                <option value="{{ storage.id }}">{{ storage.name }} (温度: {{ storage.temp_min }}~{{ storage.temp_max }}°C, 湿度: {{ storage.humidity_min }}~{{ storage.humidity_max }}%)</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="form-group" style="margin-top: 1rem;">
+            <label>粘贴内容（每行一条，格式：时间,温度,湿度）</label>
+            <textarea id="batchInput" rows="10" class="form-control"
+                placeholder="每行一条记录，支持逗号/制表符/分号/竖线分隔&#10;支持的时间格式：&#10;  YYYY-MM-DD HH:MM:SS&#10;  YYYY-MM-DD HH:MM&#10;  YYYY/MM/DD HH:MM&#10;  MM-DD HH:MM&#10;&#10;例如：&#10;2024-01-15 08:00:00,-19.5,88&#10;2024-01-15 08:05:00,-20.1,90&#10;2024-01-15 08:10:00,-21.3,92"></textarea>
+        </div>
+
+        <div style="margin-top: 1rem;">
+            <button type="button" onclick="validateBatch()" class="btn btn-primary">🔍 预览校验</button>
+        </div>
+
+        <div class="instructions" style="margin-top: 1.5rem;">
+            <h4>📝 使用说明</h4>
             <ul>
-                <li>导入历史纸质记录的温湿度数据</li>
-                <li>补录系统停机期间的数据</li>
-                <li>校准传感器时的对比数据录入</li>
-            </ul>
-            <h4>⚠️ 注意事项</h4>
-            <ul>
-                <li>手动录入的数据会标记为"手动录入"，在报表中会有标识</li>
-                <li>录入的数据同样会进行报警检查，超出范围会触发报警</li>
-                <li>请确保录入数据的准确性</li>
+                <li>从Excel/WPS/记事本复制数据，直接粘贴到上面的文本框</li>
+                <li>每行必须至少包含三个字段：<strong>时间、温度、湿度</strong></li>
+                <li>分隔符支持：逗号 <code>,</code>、制表符 <code>Tab</code>、分号 <code>;</code>、竖线 <code>|</code></li>
+                <li>点击"预览校验"后会显示：哪些行格式错误、哪些行会触发报警</li>
+                <li>确认无误后点击"确认导入"保存所有有效记录</li>
             </ul>
         </div>
     </div>
 </div>
 
+<div id="batchPreviewSection" style="display:none;">
+    <div class="card">
+        <div class="card-header">
+            <div class="header-row">
+                <h3>校验预览结果</h3>
+                <div class="header-actions">
+                    <span id="previewSummary"></span>
+                    <button type="button" onclick="confirmBatchSave()" id="confirmSaveBtn" class="btn btn-primary" disabled>✅ 确认导入</button>
+                </div>
+            </div>
+        </div>
+        <div class="card-body" id="batchPreviewBody"></div>
+    </div>
+</div>
+
 <div class="card">
     <div class="card-header">
-        <h3>最近手动录入记录</h3>
+        <div class="header-row">
+            <h3>最近手动录入记录</h3>
+            <div class="header-actions">
+                <select id="recordFilterStorage" onchange="loadManualRecords()" class="form-control">
+                    <option value="">全部冷库</option>
+                    {% for storage in storages %}
+                    <option value="{{ storage.id }}">{{ storage.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
     </div>
     <div class="card-body">
         <div id="manualRecords">
@@ -81,16 +126,17 @@
 
 {% block scripts %}
 <script>
+let validatedRecords = [];
+
 document.addEventListener('DOMContentLoaded', function() {
     const now = new Date();
     now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
     document.getElementById('recorded_at').value = now.toISOString().slice(0, 16);
-
     loadManualRecords();
 });
 
 function loadManualRecords() {
-    const storageId = document.getElementById('storage_id').value;
+    const storageId = document.getElementById('recordFilterStorage').value;
     const container = document.getElementById('manualRecords');
     container.innerHTML = '<p class="text-muted">加载中...</p>';
 
@@ -116,10 +162,216 @@ function loadManualRecords() {
             container.innerHTML = html;
         })
         .catch(err => {
-            container.innerHTML = '<p class="text-muted" style="color:#ef4444;">加载失败：' + err.message + '</p>';
+            container.innerHTML = `<p class="text-muted" style="color:#ef4444;">加载失败：${err.message}</p>`;
         });
 }
 
-document.getElementById('storage_id').addEventListener('change', loadManualRecords);
+function fillDemoData() {
+    const demo = `2024-06-17 08:00:00,-19.5,88
+2024-06-17 08:05:00,-20.1,90
+2024-06-17 08:10:00,-21.3,92
+2024-06-17 08:15:00,-25.0,95
+2024-06-17 08:20:00,ABC,90
+2024-06-17 08:25:00,-20.0,70`;
+    document.getElementById('batchInput').value = demo;
+}
+
+function clearBatchForm() {
+    document.getElementById('batchInput').value = '';
+    document.getElementById('batchPreviewSection').style.display = 'none';
+    validatedRecords = [];
+}
+
+function validateBatch() {
+    const storageId = document.getElementById('batchStorage').value;
+    const rawText = document.getElementById('batchInput').value.trim();
+
+    if (!storageId) {
+        alert('请先选择目标冷库');
+        document.getElementById('batchStorage').focus();
+        return;
+    }
+
+    if (!rawText) {
+        alert('请粘贴要导入的数据');
+        document.getElementById('batchInput').focus();
+        return;
+    }
+
+    fetch('/api/manual/batch-validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            storage_id: parseInt(storageId),
+            raw_text: rawText
+        })
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.error) {
+            alert(data.error);
+            return;
+        }
+
+        validatedRecords = data.valid_records;
+        renderBatchPreview(data);
+    })
+    .catch(err => {
+        alert('校验失败：' + err.message);
+    });
+}
+
+function renderBatchPreview(data) {
+    const section = document.getElementById('batchPreviewSection');
+    const body = document.getElementById('batchPreviewBody');
+    const summary = document.getElementById('previewSummary');
+    const confirmBtn = document.getElementById('confirmSaveBtn');
+
+    summary.innerHTML = `
+        <span class="badge" style="background:#dbeafe; color:#1e40af;">总计 ${data.total_lines} 行</span>
+        <span class="badge" style="background:#d1fae5; color:#065f46;">有效 ${data.valid_count} 行</span>
+        <span class="badge" style="background:#fee2e2; color:#991b1b;">错误 ${data.invalid_count} 行</span>
+        <span class="badge" style="background:#fef3c7; color:#92400e;">将触发报警 ${data.alarm_count} 行</span>
+    `;
+
+    confirmBtn.disabled = data.valid_count === 0;
+
+    let html = '';
+
+    if (data.invalid_count > 0) {
+        html += `
+            <h4 style="color:#dc2626; margin-bottom:1rem;">❌ 格式错误 (${data.invalid_count} 行)</h4>
+            <table class="data-table" style="margin-bottom:2rem;">
+                <thead>
+                    <tr>
+                        <th style="width:80px;">行号</th>
+                        <th>原始内容</th>
+                        <th>错误原因</th>
+                    </tr>
+                </thead>
+                <tbody>
+        `;
+        data.invalid_rows.forEach(r => {
+            html += `
+                <tr>
+                    <td style="font-weight:600; color:#dc2626;">第 ${r.line_number} 行</td>
+                    <td><code>${escapeHtml(r.original)}</code></td>
+                    <td style="color:#dc2626;">${r.error}</td>
+                </tr>
+            `;
+        });
+        html += '</tbody></table>';
+    }
+
+    if (data.valid_count > 0) {
+        html += `
+            <h4 style="color:#059669; margin-bottom:1rem;">✅ 有效记录 (${data.valid_count} 行)
+                ${data.alarm_count > 0 ? `<span style="font-size:0.875rem; font-weight:normal; color:#d97706;">（⚠️ 其中 ${data.alarm_count} 行将触发报警）</span>` : ''}
+            </h4>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th style="width:80px;">行号</th>
+                        <th>记录时间</th>
+                        <th>温度(°C)</th>
+                        <th>湿度(%)</th>
+                        <th>状态</th>
+                    </tr>
+                </thead>
+                <tbody>
+        `;
+        data.valid_records.forEach(r => {
+            if (r.has_alarm) {
+                html += `
+                    <tr style="background:#fffbeb;">
+                        <td>第 ${r.line_number} 行</td>
+                        <td>${r.recorded_at}</td>
+                        <td style="color:#dc2626; font-weight:600;">${r.temperature}</td>
+                        <td style="color:#dc2626; font-weight:600;">${r.humidity}</td>
+                        <td style="color:#d97706; font-weight:600;">⚠️ ${r.alarms.join('；')}</td>
+                    </tr>
+                `;
+            } else {
+                html += `
+                    <tr>
+                        <td>第 ${r.line_number} 行</td>
+                        <td>${r.recorded_at}</td>
+                        <td>${r.temperature}</td>
+                        <td>${r.humidity}</td>
+                        <td style="color:#059669;">✅ 正常</td>
+                    </tr>
+                `;
+            }
+        });
+        html += '</tbody></table>';
+
+        if (data.alarm_count > 0) {
+            html += `
+                <div class="warning-box" style="margin-top:1rem;">
+                    <p style="margin:0;"><strong>⚠️ 注意：</strong>以上黄色标注的 ${data.alarm_count} 条记录在保存后会自动触发报警，并发送模拟邮件通知。</p>
+                </div>
+            `;
+        }
+    }
+
+    body.innerHTML = html;
+    section.style.display = 'block';
+    section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function confirmBatchSave() {
+    const storageId = document.getElementById('batchStorage').value;
+    if (!storageId || validatedRecords.length === 0) {
+        alert('没有可导入的有效数据');
+        return;
+    }
+
+    if (!confirm(`确定要导入 ${validatedRecords.length} 条记录吗？\n（其中将触发报警 ${validatedRecords.filter(r => r.has_alarm).length} 条）`)) {
+        return;
+    }
+
+    const btn = document.getElementById('confirmSaveBtn');
+    btn.disabled = true;
+    btn.textContent = '导入中...';
+
+    fetch('/api/manual/batch-save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            storage_id: parseInt(storageId),
+            records: validatedRecords
+        })
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.error) {
+            alert(data.error);
+            btn.disabled = false;
+            btn.textContent = '✅ 确认导入';
+            return;
+        }
+
+        alert(`导入成功！\n成功保存 ${data.saved_count} 条记录\n触发报警 ${data.alarm_count} 次`);
+
+        validatedRecords = [];
+        document.getElementById('batchInput').value = '';
+        document.getElementById('batchPreviewSection').style.display = 'none';
+        btn.disabled = true;
+        btn.textContent = '✅ 确认导入';
+
+        loadManualRecords();
+    })
+    .catch(err => {
+        alert('导入失败：' + err.message);
+        btn.disabled = false;
+        btn.textContent = '✅ 确认导入';
+    });
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
 </script>
 {% endblock %}

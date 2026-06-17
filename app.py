@@ -385,11 +385,8 @@ def manual_entry():
 
 @app.route('/alarms')
 def alarms():
-    page = request.args.get('page', 1, type=int)
-    per_page = 20
-    alarms_query = AlarmLog.query.order_by(AlarmLog.triggered_at.desc())
-    pagination = alarms_query.paginate(page=page, per_page=per_page)
-    return render_template('alarms.html', pagination=pagination, alarms=pagination.items)
+    storages = ColdStorage.query.all()
+    return render_template('alarms.html', storages=storages)
 
 
 @app.route('/alarms/<int:alarm_id>/handle', methods=['POST'])
@@ -438,8 +435,8 @@ def generate_report():
 
     records = query.order_by(TemperatureRecord.recorded_at).all()
 
-    export_start_date = start_time.strftime('%Y-%m-%d')
-    export_end_date = (end_time - timedelta(seconds=1)).strftime('%Y-%m-%d')
+    export_start = start_time.strftime('%Y-%m-%d %H:%M:%S')
+    export_end = end_time.strftime('%Y-%m-%d %H:%M:%S')
 
     if not records:
         return jsonify({
@@ -447,8 +444,8 @@ def generate_report():
             'report_type': report_type,
             'start_time': start_time.strftime('%Y-%m-%d %H:%M:%S'),
             'end_time': end_time.strftime('%Y-%m-%d %H:%M:%S'),
-            'export_start_date': export_start_date,
-            'export_end_date': export_end_date,
+            'export_start': export_start,
+            'export_end': export_end,
             'summary': None,
             'daily_data': []
         })
@@ -509,21 +506,35 @@ def generate_report():
         'report_type': report_type,
         'start_time': start_time.strftime('%Y-%m-%d %H:%M:%S'),
         'end_time': end_time.strftime('%Y-%m-%d %H:%M:%S'),
-        'export_start_date': export_start_date,
-        'export_end_date': export_end_date,
+        'export_start': export_start,
+        'export_end': export_end,
         'summary': summary,
         'daily_data': daily_stats
     })
 
 
+def _parse_datetime_param(param_str, default):
+    if not param_str:
+        return default
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d'):
+        try:
+            dt = datetime.strptime(param_str, fmt)
+            if fmt == '%Y-%m-%d':
+                dt = dt + timedelta(days=1) if 'end' in param_str.lower() or 'end' in str(request.args) else dt
+            return dt
+        except ValueError:
+            continue
+    return default
+
+
 @app.route('/export/csv')
 def export_csv():
     storage_id = request.args.get('storage_id', type=int)
-    start_str = request.args.get('start_date')
-    end_str = request.args.get('end_date')
+    start_str = request.args.get('start') or request.args.get('start_date')
+    end_str = request.args.get('end') or request.args.get('end_date')
 
-    start_time = datetime.strptime(start_str, '%Y-%m-%d') if start_str else datetime.now() - timedelta(days=7)
-    end_time = datetime.strptime(end_str, '%Y-%m-%d') + timedelta(days=1) if end_str else datetime.now()
+    start_time = _parse_datetime_param(start_str, datetime.now() - timedelta(days=7))
+    end_time = _parse_datetime_param(end_str, datetime.now())
 
     query = TemperatureRecord.query.filter(
         TemperatureRecord.recorded_at >= start_time,
@@ -556,6 +567,340 @@ def export_csv():
         mimetype='text/csv',
         headers={'Content-Disposition': f'attachment; filename="{filename}"'}
     )
+
+
+@app.route('/api/report/compare')
+def report_compare():
+    start_str = request.args.get('start_date')
+    end_str = request.args.get('end_date')
+    report_type = request.args.get('type', 'daily')
+
+    if report_type == 'daily':
+        end_time = datetime.now()
+        start_time = end_time - timedelta(days=1)
+    elif report_type == 'weekly':
+        end_time = datetime.now()
+        start_time = end_time - timedelta(days=7)
+    else:
+        start_time = _parse_datetime_param(start_str, datetime.now() - timedelta(days=1))
+        end_time = _parse_datetime_param(end_str, datetime.now())
+
+    storages = ColdStorage.query.all()
+    results = []
+
+    for storage in storages:
+        records = TemperatureRecord.query.filter(
+            TemperatureRecord.storage_id == storage.id,
+            TemperatureRecord.recorded_at >= start_time,
+            TemperatureRecord.recorded_at < end_time
+        ).all()
+
+        alarms = AlarmLog.query.filter(
+            AlarmLog.storage_id == storage.id,
+            AlarmLog.triggered_at >= start_time,
+            AlarmLog.triggered_at < end_time
+        ).all()
+
+        if records:
+            temp_values = [r.temperature for r in records]
+            humidity_values = [r.humidity for r in records]
+            temp_avg = sum(temp_values) / len(temp_values)
+            humidity_avg = sum(humidity_values) / len(humidity_values)
+
+            temp_violations = sum(1 for t in temp_values if t < storage.temp_min or t > storage.temp_max)
+            humidity_violations = sum(1 for h in humidity_values if h < storage.humidity_min or h > storage.humidity_max)
+
+            temp_std = (sum((t - temp_avg) ** 2 for t in temp_values) / len(temp_values)) ** 0.5
+            humidity_std = (sum((h - humidity_avg) ** 2 for h in humidity_values) / len(humidity_values)) ** 0.5
+            instability_score = round((temp_std + humidity_std) * 10 + len(alarms) * 5, 2)
+        else:
+            temp_avg = humidity_avg = 0
+            temp_values = humidity_values = []
+            temp_violations = humidity_violations = 0
+            instability_score = 0
+
+        results.append({
+            'storage_id': storage.id,
+            'storage_name': storage.name,
+            'temp_range': f'{storage.temp_min} ~ {storage.temp_max}°C',
+            'humidity_range': f'{storage.humidity_min} ~ {storage.humidity_max}%',
+            'total_records': len(records),
+            'temp_avg': round(temp_avg, 2),
+            'temp_max': max(temp_values) if temp_values else None,
+            'temp_min': min(temp_values) if temp_values else None,
+            'humidity_avg': round(humidity_avg, 2),
+            'humidity_max': max(humidity_values) if humidity_values else None,
+            'humidity_min': min(humidity_values) if humidity_values else None,
+            'temp_violations': temp_violations,
+            'humidity_violations': humidity_violations,
+            'alarm_count': len(alarms),
+            'instability_score': instability_score
+        })
+
+    results.sort(key=lambda x: x['instability_score'], reverse=True)
+
+    for i, r in enumerate(results):
+        r['rank'] = i + 1
+
+    return jsonify({
+        'start_time': start_time.strftime('%Y-%m-%d %H:%M:%S'),
+        'end_time': end_time.strftime('%Y-%m-%d %H:%M:%S'),
+        'storages': results
+    })
+
+
+@app.route('/api/alarms')
+def api_alarms_list():
+    storage_id = request.args.get('storage_id', type=int)
+    is_handled = request.args.get('is_handled')
+    alarm_type = request.args.get('alarm_type')
+    start_str = request.args.get('start_time')
+    end_str = request.args.get('end_time')
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 50, type=int)
+
+    query = AlarmLog.query
+
+    if storage_id:
+        query = query.filter_by(storage_id=storage_id)
+    if is_handled is not None and is_handled != '':
+        query = query.filter_by(is_handled=(is_handled in ('true', '1', 'True', True)))
+    if alarm_type:
+        query = query.filter(AlarmLog.alarm_type == alarm_type)
+    if start_str:
+        start_time = _parse_datetime_param(start_str, None)
+        if start_time:
+            query = query.filter(AlarmLog.triggered_at >= start_time)
+    if end_str:
+        end_time = _parse_datetime_param(end_str, None)
+        if end_time:
+            query = query.filter(AlarmLog.triggered_at < end_time)
+
+    query = query.order_by(AlarmLog.triggered_at.desc())
+    pagination = query.paginate(page=page, per_page=per_page)
+
+    return jsonify({
+        'total': pagination.total,
+        'page': pagination.page,
+        'per_page': pagination.per_page,
+        'pages': pagination.pages,
+        'items': [a.to_dict() for a in pagination.items]
+    })
+
+
+@app.route('/export/alarms')
+def export_alarms():
+    storage_id = request.args.get('storage_id', type=int)
+    is_handled = request.args.get('is_handled')
+    alarm_type = request.args.get('alarm_type')
+    start_str = request.args.get('start_time')
+    end_str = request.args.get('end_time')
+
+    query = AlarmLog.query
+    if storage_id:
+        query = query.filter_by(storage_id=storage_id)
+    if is_handled is not None and is_handled != '':
+        query = query.filter_by(is_handled=(is_handled in ('true', '1', 'True', True)))
+    if alarm_type:
+        query = query.filter(AlarmLog.alarm_type == alarm_type)
+    if start_str:
+        start_time = _parse_datetime_param(start_str, None)
+        if start_time:
+            query = query.filter(AlarmLog.triggered_at >= start_time)
+    if end_str:
+        end_time = _parse_datetime_param(end_str, None)
+        if end_time:
+            query = query.filter(AlarmLog.triggered_at < end_time)
+
+    alarms = query.order_by(AlarmLog.triggered_at.desc()).all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(['ID', '冷库名称', '报警类型', '报警内容', '当前值', '范围下限', '范围上限',
+                     '触发时间', '是否已处理', '处理人', '处理时间', '处理备注'])
+
+    for a in alarms:
+        writer.writerow([
+            a.id,
+            a.storage.name if a.storage else '未知',
+            '温度' if 'temp' in a.alarm_type else '湿度',
+            a.message,
+            a.current_value,
+            a.threshold_min,
+            a.threshold_max,
+            a.triggered_at.strftime('%Y-%m-%d %H:%M:%S'),
+            '是' if a.is_handled else '否',
+            a.handled_by or '',
+            a.handled_at.strftime('%Y-%m-%d %H:%M:%S') if a.handled_at else '',
+            a.handled_note or ''
+        ])
+
+    output.seek(0)
+    filename = f"alarm_logs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    return Response(
+        output.getvalue(),
+        mimetype='text/csv',
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'}
+    )
+
+
+@app.route('/api/manual/batch-validate', methods=['POST'])
+def batch_validate():
+    data = request.json or {}
+    raw_text = data.get('raw_text', '')
+    storage_id = data.get('storage_id')
+
+    if not storage_id:
+        return jsonify({'error': '请选择冷库'}), 400
+
+    storage = ColdStorage.query.get(storage_id)
+    if not storage:
+        return jsonify({'error': '冷库不存在'}), 404
+
+    lines = [line.strip() for line in raw_text.strip().split('\n') if line.strip()]
+    valid_records = []
+    invalid_rows = []
+    alarm_preview = []
+
+    for i, line in enumerate(lines, 1):
+        parts = [p.strip() for p in line.replace('\t', ',').replace(';', ',').replace('|', ',').split(',')]
+        parts = [p for p in parts if p]
+
+        if len(parts) < 3:
+            invalid_rows.append({
+                'line_number': i,
+                'original': line,
+                'error': '字段不足，至少需要：时间,温度,湿度'
+            })
+            continue
+
+        time_str = parts[0]
+        temp_str = parts[1]
+        hum_str = parts[2]
+
+        record_time = None
+        for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M', '%Y/%m/%d %H:%M:%S', '%Y/%m/%d %H:%M',
+                    '%m-%d %H:%M', '%m/%d %H:%M'):
+            try:
+                record_time = datetime.strptime(time_str, fmt)
+                if record_time.year == 1900:
+                    record_time = record_time.replace(year=datetime.now().year)
+                break
+            except ValueError:
+                continue
+
+        if not record_time:
+            invalid_rows.append({
+                'line_number': i,
+                'original': line,
+                'error': f'时间格式无法识别："{time_str}"，支持 YYYY-MM-DD HH:MM:SS 等'
+            })
+            continue
+
+        try:
+            temperature = float(temp_str)
+        except ValueError:
+            invalid_rows.append({
+                'line_number': i,
+                'original': line,
+                'error': f'温度无法解析为数字："{temp_str}"'
+            })
+            continue
+
+        try:
+            humidity = float(hum_str)
+        except ValueError:
+            invalid_rows.append({
+                'line_number': i,
+                'original': line,
+                'error': f'湿度无法解析为数字："{hum_str}"'
+            })
+            continue
+
+        alarms = []
+        if temperature < storage.temp_min:
+            alarms.append(f'温度过低({temperature}°C < {storage.temp_min}°C)')
+        elif temperature > storage.temp_max:
+            alarms.append(f'温度过高({temperature}°C > {storage.temp_max}°C)')
+
+        if humidity < storage.humidity_min:
+            alarms.append(f'湿度过低({humidity}% < {storage.humidity_min}%)')
+        elif humidity > storage.humidity_max:
+            alarms.append(f'湿度过高({humidity}% > {storage.humidity_max}%)')
+
+        record = {
+            'line_number': i,
+            'recorded_at': record_time.strftime('%Y-%m-%d %H:%M:%S'),
+            'temperature': temperature,
+            'humidity': humidity,
+            'has_alarm': len(alarms) > 0,
+            'alarms': alarms
+        }
+        valid_records.append(record)
+
+        if alarms:
+            alarm_preview.append(record)
+
+    return jsonify({
+        'storage_name': storage.name,
+        'total_lines': len(lines),
+        'valid_count': len(valid_records),
+        'invalid_count': len(invalid_rows),
+        'alarm_count': len(alarm_preview),
+        'valid_records': valid_records,
+        'invalid_rows': invalid_rows,
+        'alarm_preview': alarm_preview
+    })
+
+
+@app.route('/api/manual/batch-save', methods=['POST'])
+def batch_save():
+    data = request.json or {}
+    storage_id = data.get('storage_id')
+    records = data.get('records', [])
+
+    if not storage_id:
+        return jsonify({'error': '请选择冷库'}), 400
+
+    storage = ColdStorage.query.get(storage_id)
+    if not storage:
+        return jsonify({'error': '冷库不存在'}), 404
+
+    saved_count = 0
+    created_alarms = []
+
+    for r in records:
+        try:
+            record_time = datetime.strptime(r['recorded_at'], '%Y-%m-%d %H:%M:%S')
+        except (ValueError, KeyError):
+            continue
+
+        record = TemperatureRecord(
+            storage_id=storage_id,
+            temperature=float(r['temperature']),
+            humidity=float(r['humidity']),
+            is_manual=True,
+            recorded_at=record_time
+        )
+        db.session.add(record)
+
+        alarms = check_alarm(storage, float(r['temperature']), float(r['humidity']), record_time)
+        for alarm in alarms:
+            db.session.add(alarm)
+            db.session.flush()
+            created_alarms.append(alarm.to_dict())
+            send_simulated_email(alarm)
+
+        saved_count += 1
+
+    db.session.commit()
+
+    return jsonify({
+        'status': 'success',
+        'saved_count': saved_count,
+        'alarm_count': len(created_alarms),
+        'alarms': created_alarms
+    })
 
 
 @app.route('/api/active-alarms')

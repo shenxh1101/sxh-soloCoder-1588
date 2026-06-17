@@ -5,108 +5,75 @@
 {% block content %}
 <div class="page-header">
     <h2>报警日志</h2>
-    <p class="subtitle">查看和处理所有报警记录</p>
+    <p class="subtitle">查看、筛选、导出所有报警记录</p>
 </div>
 
 <div class="card">
     <div class="card-header">
         <div class="header-row">
-            <h3>报警列表</h3>
+            <h3>筛选条件</h3>
             <div class="header-actions">
-                <span class="badge badge-warning">未处理: {{ alarms|selectattr('is_handled', 'equalto', false)|list|length }}</span>
-                <span class="badge badge-success">已处理: {{ alarms|selectattr('is_handled', 'equalto', true)|list|length }}</span>
+                <button type="button" onclick="resetFilters()" class="btn btn-secondary">重置</button>
+                <button type="button" onclick="exportFilteredAlarms()" class="btn btn-primary">导出CSV</button>
             </div>
         </div>
     </div>
     <div class="card-body">
-        {% if alarms %}
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>ID</th>
-                    <th>冷库名称</th>
-                    <th>报警类型</th>
-                    <th>报警内容</th>
-                    <th>当前值</th>
-                    <th>触发时间</th>
-                    <th>状态</th>
-                    <th>处理人</th>
-                    <th>处理时间</th>
-                    <th>操作</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for alarm in alarms %}
-                <tr class="{{ 'alarm-unhandled' if not alarm.is_handled else '' }}">
-                    <td>{{ alarm.id }}</td>
-                    <td>{{ alarm.storage.name }}</td>
-                    <td>
-                        <span class="type-badge type-{{ alarm.alarm_type }}">
-                            {% if 'temp' in alarm.alarm_type %}
-                                🌡️ 温度
-                            {% else %}
-                                💧 湿度
-                            {% endif %}
-                        </span>
-                    </td>
-                    <td>{{ alarm.message }}</td>
-                    <td>
-                        {% if 'temp' in alarm.alarm_type %}
-                            {{ alarm.current_value }}°C
-                        {% else %}
-                            {{ alarm.current_value }}%
-                        {% endif %}
-                    </td>
-                    <td>{{ alarm.triggered_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
-                    <td>
-                        {% if alarm.is_handled %}
-                            <span class="status-badge status-handled">已处理</span>
-                        {% else %}
-                            <span class="status-badge status-pending">待处理</span>
-                        {% endif %}
-                    </td>
-                    <td>{{ alarm.handled_by or '-' }}</td>
-                    <td>{{ alarm.handled_at.strftime('%Y-%m-%d %H:%M:%S') if alarm.handled_at else '-' }}</td>
-                    <td>
-                        {% if not alarm.is_handled %}
-                        <button class="btn btn-small btn-primary" onclick="openHandleAlarmModal({{ alarm.id }})">处理</button>
-                        {% else %}
-                        <button class="btn btn-small btn-secondary" onclick="viewAlarmDetail({{ alarm.id }})">详情</button>
-                        {% endif %}
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+        <form id="alarmFilterForm" class="form-inline" onsubmit="event.preventDefault(); applyFilters();">
+            <div class="form-group">
+                <label>冷库</label>
+                <select id="filterStorage" class="form-control">
+                    <option value="">全部冷库</option>
+                    {% for storage in storages %}
+                    <option value="{{ storage.id }}">{{ storage.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>处理状态</label>
+                <select id="filterHandled" class="form-control">
+                    <option value="">全部状态</option>
+                    <option value="false">待处理</option>
+                    <option value="true">已处理</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>报警类型</label>
+                <select id="filterType" class="form-control">
+                    <option value="">全部类型</option>
+                    <option value="temp_high">温度过高</option>
+                    <option value="temp_low">温度过低</option>
+                    <option value="humidity_high">湿度过高</option>
+                    <option value="humidity_low">湿度过低</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>开始时间</label>
+                <input type="datetime-local" id="filterStartTime" class="form-control">
+            </div>
+            <div class="form-group">
+                <label>结束时间</label>
+                <input type="datetime-local" id="filterEndTime" class="form-control">
+            </div>
+            <div class="form-group">
+                <label>&nbsp;</label>
+                <button type="submit" class="btn btn-primary">筛选</button>
+            </div>
+        </form>
+    </div>
+</div>
 
-        {% if pagination.pages > 1 %}
-        <div class="pagination">
-            {% if pagination.has_prev %}
-            <a href="{{ url_for('alarms', page=pagination.prev_num) }}" class="page-link">&laquo; 上一页</a>
-            {% endif %}
-            
-            {% for page_num in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
-                {% if page_num %}
-                    {% if pagination.page == page_num %}
-                    <span class="page-link active">{{ page_num }}</span>
-                    {% else %}
-                    <a href="{{ url_for('alarms', page=page_num) }}" class="page-link">{{ page_num }}</a>
-                    {% endif %}
-                {% else %}
-                    <span class="page-link">...</span>
-                {% endif %}
-            {% endfor %}
-            
-            {% if pagination.has_next %}
-            <a href="{{ url_for('alarms', page=pagination.next_num) }}" class="page-link">下一页 &raquo;</a>
-            {% endif %}
+<div class="card">
+    <div class="card-header">
+        <div class="header-row">
+            <h3>报警列表 <span id="alarmCountBadge" class="badge badge-warning"></span></h3>
         </div>
-        {% endif %}
-        {% else %}
-        <div class="empty-state-small">
-            <p>暂无报警记录</p>
+    </div>
+    <div class="card-body">
+        <div id="alarmTableContainer">
+            <p class="text-muted">加载中...</p>
         </div>
-        {% endif %}
+        <div id="alarmPagination" class="pagination" style="margin-top:1.5rem;"></div>
     </div>
 </div>
 
@@ -126,6 +93,201 @@
 
 {% block scripts %}
 <script>
+let currentPage = 1;
+const perPage = 20;
+let currentFilters = {};
+let lastLoadedData = null;
+
+function getCurrentFilters() {
+    const filters = {};
+    const storageId = document.getElementById('filterStorage').value;
+    const isHandled = document.getElementById('filterHandled').value;
+    const alarmType = document.getElementById('filterType').value;
+    const startTime = document.getElementById('filterStartTime').value;
+    const endTime = document.getElementById('filterEndTime').value;
+
+    if (storageId) filters.storage_id = parseInt(storageId);
+    if (isHandled !== '') filters.is_handled = isHandled;
+    if (alarmType) filters.alarm_type = alarmType;
+    if (startTime) filters.start_time = startTime.replace('T', ' ') + ':00';
+    if (endTime) filters.end_time = endTime.replace('T', ' ') + ':59';
+
+    return filters;
+}
+
+function applyFilters() {
+    currentFilters = getCurrentFilters();
+    currentPage = 1;
+    loadAlarms();
+}
+
+function resetFilters() {
+    document.getElementById('filterStorage').value = '';
+    document.getElementById('filterHandled').value = '';
+    document.getElementById('filterType').value = '';
+    document.getElementById('filterStartTime').value = '';
+    document.getElementById('filterEndTime').value = '';
+    currentFilters = {};
+    currentPage = 1;
+    loadAlarms();
+}
+
+function buildQueryParams(page) {
+    const params = new URLSearchParams();
+    params.append('page', page);
+    params.append('per_page', perPage);
+    Object.keys(currentFilters).forEach(key => {
+        if (currentFilters[key] !== undefined && currentFilters[key] !== '') {
+            params.append(key, currentFilters[key]);
+        }
+    });
+    return params.toString();
+}
+
+function loadAlarms() {
+    const container = document.getElementById('alarmTableContainer');
+    container.innerHTML = '<p class="text-muted">加载中...</p>';
+
+    const url = `/api/alarms?${buildQueryParams(currentPage)}`;
+
+    fetch(url)
+        .then(res => res.json())
+        .then(data => {
+            lastLoadedData = data;
+            renderAlarmTable(data);
+            renderPagination(data);
+            document.getElementById('alarmCountBadge').textContent = `共 ${data.total} 条`;
+        })
+        .catch(err => {
+            container.innerHTML = `<p class="text-muted" style="color:#ef4444;">加载失败：${err.message}</p>`;
+        });
+}
+
+function renderAlarmTable(data) {
+    const container = document.getElementById('alarmTableContainer');
+
+    if (data.total === 0) {
+        container.innerHTML = '<div class="empty-state-small"><p>没有符合条件的报警记录</p></div>';
+        return;
+    }
+
+    let html = `
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>冷库名称</th>
+                    <th>报警类型</th>
+                    <th>报警内容</th>
+                    <th>当前值</th>
+                    <th>触发时间</th>
+                    <th>状态</th>
+                    <th>处理人</th>
+                    <th>处理时间</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody>
+    `;
+
+    data.items.forEach(alarm => {
+        const unit = alarm.alarm_type.includes('temp') ? '°C' : '%';
+        html += `
+            <tr class="${!alarm.is_handled ? 'alarm-unhandled' : ''}">
+                <td>${alarm.id}</td>
+                <td>${alarm.storage_name}</td>
+                <td>
+                    <span class="type-badge type-${alarm.alarm_type}">
+                        ${alarm.alarm_type.includes('temp') ? '🌡️ 温度' : '💧 湿度'}
+                    </span>
+                </td>
+                <td>${alarm.message}</td>
+                <td>${alarm.current_value}${unit}</td>
+                <td>${alarm.triggered_at}</td>
+                <td>
+                    ${alarm.is_handled
+                        ? '<span class="status-badge status-handled">已处理</span>'
+                        : '<span class="status-badge status-pending">待处理</span>'}
+                </td>
+                <td>${alarm.handled_by || '-'}</td>
+                <td>${alarm.handled_at || '-'}</td>
+                <td>
+                    ${!alarm.is_handled
+                        ? `<button class="btn btn-small btn-primary" onclick="openHandleAlarmModal(${alarm.id})">处理</button>`
+                        : ''}
+                    <button class="btn btn-small btn-secondary" onclick="viewAlarmDetail(${alarm.id})">详情</button>
+                </td>
+            </tr>
+        `;
+    });
+
+    html += '</tbody></table>';
+    container.innerHTML = html;
+}
+
+function renderPagination(data) {
+    const pagination = document.getElementById('alarmPagination');
+
+    if (data.pages <= 1) {
+        pagination.innerHTML = '';
+        return;
+    }
+
+    let html = '';
+
+    if (data.page > 1) {
+        html += `<a href="#" onclick="goToPage(${data.page - 1}); return false;" class="page-link">&laquo; 上一页</a>`;
+    }
+
+    const maxVisible = 5;
+    let startPage = Math.max(1, data.page - Math.floor(maxVisible / 2));
+    let endPage = Math.min(data.pages, startPage + maxVisible - 1);
+    startPage = Math.max(1, endPage - maxVisible + 1);
+
+    if (startPage > 1) {
+        html += `<a href="#" onclick="goToPage(1); return false;" class="page-link">1</a>`;
+        if (startPage > 2) html += `<span class="page-link">...</span>`;
+    }
+
+    for (let p = startPage; p <= endPage; p++) {
+        if (p === data.page) {
+            html += `<span class="page-link active">${p}</span>`;
+        } else {
+            html += `<a href="#" onclick="goToPage(${p}); return false;" class="page-link">${p}</a>`;
+        }
+    }
+
+    if (endPage < data.pages) {
+        if (endPage < data.pages - 1) html += `<span class="page-link">...</span>`;
+        html += `<a href="#" onclick="goToPage(${data.pages}); return false;" class="page-link">${data.pages}</a>`;
+    }
+
+    if (data.page < data.pages) {
+        html += `<a href="#" onclick="goToPage(${data.page + 1}); return false;" class="page-link">下一页 &raquo;</a>`;
+    }
+
+    pagination.innerHTML = html;
+}
+
+function goToPage(page) {
+    currentPage = page;
+    loadAlarms();
+}
+
+function exportFilteredAlarms() {
+    const params = new URLSearchParams();
+    Object.keys(currentFilters).forEach(key => {
+        if (currentFilters[key] !== undefined && currentFilters[key] !== '') {
+            params.append(key, currentFilters[key]);
+        }
+    });
+
+    const query = params.toString();
+    const url = `/export/alarms${query ? '?' + query : ''}`;
+    console.log('导出报警CSV:', url);
+    window.location.href = url;
+}
+
 function viewAlarmDetail(id) {
     fetch(`/api/alarms/${id}`)
         .then(res => res.json())
@@ -134,7 +296,7 @@ function viewAlarmDetail(id) {
             const unit = alarm.alarm_type.includes('temp') ? '°C' : '%';
             const alarmTypeText = alarm.alarm_type.includes('temp') ? '温度报警' : '湿度报警';
             const alarmTypeDesc = alarm.alarm_type.includes('high') ? '（过高）' : alarm.alarm_type.includes('low') ? '（过低）' : '';
-            
+
             let handledSection = '';
             if (alarm.is_handled) {
                 handledSection = `
@@ -163,7 +325,7 @@ function viewAlarmDetail(id) {
                     </div>
                 `;
             }
-            
+
             body.innerHTML = `
                 <div class="detail-grid">
                     <div class="detail-item">
@@ -203,5 +365,9 @@ function viewAlarmDetail(id) {
 function closeDetailModal() {
     document.getElementById('alarmDetailModal').style.display = 'none';
 }
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadAlarms();
+});
 </script>
 {% endblock %}
