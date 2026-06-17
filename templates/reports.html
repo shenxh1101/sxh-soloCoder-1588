@@ -95,6 +95,9 @@
 <script>
 let currentReportParams = {};
 let lastReportData = null;
+let tempCompareChart = null;
+let humidityCompareChart = null;
+let anomalyChart = null;
 
 document.getElementById('reportType').addEventListener('change', function() {
     const customRange = document.getElementById('customDateRange');
@@ -256,6 +259,10 @@ function renderCompareReport(data) {
     const resultDiv = document.getElementById('reportResult');
     const body = document.getElementById('reportBody');
 
+    if (tempCompareChart) { tempCompareChart.destroy(); tempCompareChart = null; }
+    if (humidityCompareChart) { humidityCompareChart.destroy(); humidityCompareChart = null; }
+    if (anomalyChart) { anomalyChart.destroy(); anomalyChart = null; }
+
     if (!data.storages || data.storages.length === 0) {
         body.innerHTML = `<div class="empty-state-small">
             <p>该时间段内没有数据（${data.start_time} ~ ${data.end_time}）</p>
@@ -273,6 +280,9 @@ function renderCompareReport(data) {
                 <p><strong>冷库：</strong>全部冷库（共 ${data.storages.length} 个）</p>
                 <p><strong>报表类型：</strong>${reportTypeLabel(currentReportParams.type)}</p>
                 <p><strong>时间范围：</strong>${data.start_time} 至 ${data.end_time}</p>
+                <p style="color:#64748b; font-size:0.8125rem;">
+                    <em>💡 点击排行表中的冷库行可快速查看单冷库报表</em>
+                </p>
             </div>
             <div class="summary-cards">
                 <div class="summary-card">
@@ -296,8 +306,23 @@ function renderCompareReport(data) {
             </div>
         </div>
 
-        <h4 style="margin-top: 2rem;">冷库对比排行（按稳定性从差到好）</h4>
-        <table class="data-table">
+        <h4 style="margin-top: 2rem;">📈 温度趋势对比</h4>
+        <div class="chart-container" style="position:relative; height:300px;">
+            <canvas id="tempCompareChart"></canvas>
+        </div>
+
+        <h4 style="margin-top: 2rem;">💧 湿度趋势对比</h4>
+        <div class="chart-container" style="position:relative; height:300px;">
+            <canvas id="humidityCompareChart"></canvas>
+        </div>
+
+        <h4 style="margin-top: 2rem;">🔔 异常与报警占比</h4>
+        <div class="chart-container" style="position:relative; height:300px;">
+            <canvas id="anomalyChart"></canvas>
+        </div>
+
+        <h4 style="margin-top: 2rem;">🏆 冷库对比排行（点击查看单冷库报表）</h4>
+        <table class="data-table clickable-rows">
             <thead>
                 <tr>
                     <th>排名</th>
@@ -318,9 +343,9 @@ function renderCompareReport(data) {
         const rankClass = s.rank === 1 ? 'value-high' : (s.rank === data.storages.length ? 'value-low' : '');
         const rankBadge = s.rank === 1 ? '🥇' : (s.rank === 2 ? '🥈' : (s.rank === 3 ? '🥉' : `#${s.rank}`));
         html += `
-            <tr class="${s.rank === 1 ? 'alarm-unhandled' : ''}">
+            <tr class="${s.rank === 1 ? 'alarm-unhandled' : ''}" data-storage-id="${s.storage_id}" onclick="goToStorageReport(${s.storage_id})">
                 <td class="${rankClass}" style="font-weight:700;">${rankBadge}</td>
-                <td style="font-weight:600;">${s.storage_name}</td>
+                <td style="font-weight:600; color:#2563eb; cursor:pointer;">${s.storage_name} ↗</td>
                 <td>${s.total_records}</td>
                 <td>${s.temp_avg}°C</td>
                 <td>${s.humidity_avg}%</td>
@@ -368,6 +393,129 @@ function renderCompareReport(data) {
     html += '</tbody></table></div>';
     body.innerHTML = html;
     resultDiv.style.display = 'block';
+
+    setTimeout(() => initCompareCharts(data), 50);
+}
+
+function goToStorageReport(storageId) {
+    document.getElementById('reportStorage').value = storageId;
+    generateReport();
+    document.getElementById('reportResult').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function initCompareCharts(data) {
+    if (!data.trend || !data.trend.labels) return;
+
+    const tempCtx = document.getElementById('tempCompareChart');
+    if (tempCtx && data.trend.temperature_datasets) {
+        tempCompareChart = new Chart(tempCtx, {
+            type: 'line',
+            data: {
+                labels: data.trend.labels,
+                datasets: data.trend.temperature_datasets.map(ds => ({
+                    label: ds.storage_name,
+                    data: ds.data,
+                    borderColor: ds.color,
+                    backgroundColor: ds.color + '20',
+                    tension: 0.3,
+                    pointRadius: 3,
+                    pointHoverRadius: 5,
+                    fill: false,
+                    spanGaps: true
+                }))
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'bottom' },
+                    tooltip: { mode: 'index', intersect: false }
+                },
+                scales: {
+                    y: {
+                        title: { display: true, text: '温度 (°C)' }
+                    }
+                }
+            }
+        });
+    }
+
+    const humCtx = document.getElementById('humidityCompareChart');
+    if (humCtx && data.trend.humidity_datasets) {
+        humidityCompareChart = new Chart(humCtx, {
+            type: 'line',
+            data: {
+                labels: data.trend.labels,
+                datasets: data.trend.humidity_datasets.map(ds => ({
+                    label: ds.storage_name,
+                    data: ds.data,
+                    borderColor: ds.color,
+                    backgroundColor: ds.color + '20',
+                    tension: 0.3,
+                    pointRadius: 3,
+                    pointHoverRadius: 5,
+                    fill: false,
+                    spanGaps: true
+                }))
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'bottom' },
+                    tooltip: { mode: 'index', intersect: false }
+                },
+                scales: {
+                    y: {
+                        title: { display: true, text: '湿度 (%)' }
+                    }
+                }
+            }
+        });
+    }
+
+    const anomalyCtx = document.getElementById('anomalyChart');
+    if (anomalyCtx && data.storages) {
+        anomalyChart = new Chart(anomalyCtx, {
+            type: 'bar',
+            data: {
+                labels: data.storages.map(s => s.storage_name),
+                datasets: [
+                    {
+                        label: '温度超限次数',
+                        data: data.storages.map(s => s.temp_violations),
+                        backgroundColor: '#f97316',
+                        borderRadius: 4
+                    },
+                    {
+                        label: '湿度超限次数',
+                        data: data.storages.map(s => s.humidity_violations),
+                        backgroundColor: '#06b6d4',
+                        borderRadius: 4
+                    },
+                    {
+                        label: '报警次数',
+                        data: data.storages.map(s => s.alarm_count),
+                        backgroundColor: '#ef4444',
+                        borderRadius: 4
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'bottom' }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: { display: true, text: '次数' }
+                    }
+                }
+            }
+        });
+    }
 }
 
 function printReport() {

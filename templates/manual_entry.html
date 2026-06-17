@@ -105,6 +105,27 @@
 <div class="card">
     <div class="card-header">
         <div class="header-row">
+            <h3>导入批次记录</h3>
+            <div class="header-actions">
+                <select id="batchFilterStorage" onchange="loadImportBatches()" class="form-control">
+                    <option value="">全部冷库</option>
+                    {% for storage in storages %}
+                    <option value="{{ storage.id }}">{{ storage.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+    </div>
+    <div class="card-body">
+        <div id="importBatches">
+            <p class="text-muted">加载中...</p>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <div class="header-row">
             <h3>最近手动录入记录</h3>
             <div class="header-actions">
                 <select id="recordFilterStorage" onchange="loadManualRecords()" class="form-control">
@@ -132,8 +153,98 @@ document.addEventListener('DOMContentLoaded', function() {
     const now = new Date();
     now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
     document.getElementById('recorded_at').value = now.toISOString().slice(0, 16);
+    loadImportBatches();
     loadManualRecords();
 });
+
+function loadImportBatches() {
+    const storageId = document.getElementById('batchFilterStorage').value;
+    const container = document.getElementById('importBatches');
+    container.innerHTML = '<p class="text-muted">加载中...</p>';
+
+    let url = '/api/import-batches?limit=20';
+    if (storageId) {
+        url += `&storage_id=${storageId}`;
+    }
+
+    fetch(url)
+        .then(res => res.json())
+        .then(data => {
+            if (data.total === 0) {
+                const filterText = storageId ? '该冷库' : '所有冷库';
+                container.innerHTML = `<p class="text-muted">暂无导入批次记录（${filterText}）</p>`;
+                return;
+            }
+
+            let html = `<table class="data-table">
+                <thead>
+                    <tr>
+                        <th>批次ID</th>
+                        <th>冷库名称</th>
+                        <th>导入时间</th>
+                        <th>导入人</th>
+                        <th>记录数</th>
+                        <th>报警数</th>
+                        <th>状态</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>`;
+
+            data.items.forEach(b => {
+                html += `
+                    <tr class="${b.is_revoked ? '' : ''}">
+                        <td>#${b.id}</td>
+                        <td>${b.storage_name}</td>
+                        <td>${b.imported_at}</td>
+                        <td>${b.imported_by}</td>
+                        <td>${b.record_count}</td>
+                        <td class="${b.alarm_count > 0 ? 'value-high' : ''}">${b.alarm_count}</td>
+                        <td>
+                            ${b.is_revoked
+                                ? '<span class="status-badge" style="background:#e2e8f0; color:#64748b;">已撤回</span>'
+                                : '<span class="status-badge status-handled">正常</span>'}
+                        </td>
+                        <td>
+                            ${!b.is_revoked
+                                ? `<button class="btn btn-small btn-danger" onclick="revokeBatch(${b.id}, ${b.record_count}, ${b.alarm_count})">撤回</button>`
+                                : `<span style="color:#94a3b8; font-size:0.8125rem;">${b.revoked_at} 撤回</span>`}
+                        </td>
+                    </tr>
+                `;
+            });
+
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        })
+        .catch(err => {
+            container.innerHTML = `<p class="text-muted" style="color:#ef4444;">加载失败：${err.message}</p>`;
+        });
+}
+
+function revokeBatch(batchId, recordCount, alarmCount) {
+    if (!confirm(`确定要撤回批次 #${batchId} 吗？\n\n将删除：\n  - ${recordCount} 条温湿度记录\n  - ${alarmCount} 条报警记录\n\n撤回后不可恢复，请谨慎操作！`)) {
+        return;
+    }
+
+    fetch(`/api/import-batches/${batchId}/revoke`, {
+        method: 'POST'
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.error) {
+            alert('撤回失败：' + data.error);
+            return;
+        }
+
+        alert(data.message || '撤回成功！');
+        loadImportBatches();
+        loadManualRecords();
+    })
+    .catch(err => {
+        alert('撤回失败：' + err.message);
+    });
+}
 
 function loadManualRecords() {
     const storageId = document.getElementById('recordFilterStorage').value;
@@ -359,6 +470,7 @@ function confirmBatchSave() {
         btn.disabled = true;
         btn.textContent = '✅ 确认导入';
 
+        loadImportBatches();
         loadManualRecords();
     })
     .catch(err => {

@@ -41,9 +41,43 @@ class ColdStorage(db.Model):
         }
 
 
+class ImportBatch(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    storage_id = db.Column(db.Integer, db.ForeignKey('cold_storage.id'), nullable=False)
+    batch_type = db.Column(db.String(20), default='manual')
+    record_count = db.Column(db.Integer, default=0)
+    alarm_count = db.Column(db.Integer, default=0)
+    imported_at = db.Column(db.DateTime, default=datetime.now)
+    imported_by = db.Column(db.String(100), default='系统导入')
+    note = db.Column(db.String(500))
+    is_revoked = db.Column(db.Boolean, default=False)
+    revoked_at = db.Column(db.DateTime)
+
+    records = db.relationship('TemperatureRecord', backref='batch', lazy='dynamic',
+                              foreign_keys='TemperatureRecord.batch_id')
+    alarms = db.relationship('AlarmLog', backref='batch', lazy='dynamic',
+                             foreign_keys='AlarmLog.batch_id')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'storage_id': self.storage_id,
+            'storage_name': self.storage.name if self.storage else '未知',
+            'batch_type': self.batch_type,
+            'record_count': self.record_count,
+            'alarm_count': self.alarm_count,
+            'imported_at': self.imported_at.strftime('%Y-%m-%d %H:%M:%S'),
+            'imported_by': self.imported_by,
+            'note': self.note,
+            'is_revoked': self.is_revoked,
+            'revoked_at': self.revoked_at.strftime('%Y-%m-%d %H:%M:%S') if self.revoked_at else None
+        }
+
+
 class TemperatureRecord(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     storage_id = db.Column(db.Integer, db.ForeignKey('cold_storage.id'), nullable=False)
+    batch_id = db.Column(db.Integer, db.ForeignKey('import_batch.id'), nullable=True)
     temperature = db.Column(db.Float, nullable=False)
     humidity = db.Column(db.Float, nullable=False)
     is_manual = db.Column(db.Boolean, default=False)
@@ -53,6 +87,7 @@ class TemperatureRecord(db.Model):
         return {
             'id': self.id,
             'storage_id': self.storage_id,
+            'batch_id': self.batch_id,
             'temperature': self.temperature,
             'humidity': self.humidity,
             'is_manual': self.is_manual,
@@ -63,6 +98,7 @@ class TemperatureRecord(db.Model):
 class AlarmLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     storage_id = db.Column(db.Integer, db.ForeignKey('cold_storage.id'), nullable=False)
+    batch_id = db.Column(db.Integer, db.ForeignKey('import_batch.id'), nullable=True)
     alarm_type = db.Column(db.String(20), nullable=False)
     message = db.Column(db.String(200), nullable=False)
     current_value = db.Column(db.Float, nullable=False)
@@ -79,6 +115,7 @@ class AlarmLog(db.Model):
             'id': self.id,
             'storage_id': self.storage_id,
             'storage_name': self.storage.name,
+            'batch_id': self.batch_id,
             'alarm_type': self.alarm_type,
             'message': self.message,
             'current_value': self.current_value,
@@ -642,10 +679,78 @@ def report_compare():
     for i, r in enumerate(results):
         r['rank'] = i + 1
 
+    total_seconds = (end_time - start_time).total_seconds()
+    max_points = 24
+    if total_seconds <= 86400:
+        interval_seconds = 3600
+    elif total_seconds <= 86400 * 3:
+        interval_seconds = 3600 * 6
+    elif total_seconds <= 86400 * 7:
+        interval_seconds = 86400
+    else:
+        interval_seconds = 86400 * 3
+
+    num_intervals = min(max_points, int(total_seconds / interval_seconds) + 1)
+    actual_interval = total_seconds / (num_intervals - 1) if num_intervals > 1 else total_seconds
+
+    labels = []
+    for i in range(num_intervals):
+        t = start_time + timedelta(seconds=actual_interval * i)
+        if actual_interval >= 86400:
+            labels.append(t.strftime('%m-%d'))
+        else:
+            labels.append(t.strftime('%m-%d %H:%M'))
+
+    temp_datasets = []
+    humidity_datasets = []
+    colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316']
+
+    for idx, storage in enumerate(storages):
+        color = colors[idx % len(colors)]
+        records = TemperatureRecord.query.filter(
+            TemperatureRecord.storage_id == storage.id,
+            TemperatureRecord.recorded_at >= start_time,
+            TemperatureRecord.recorded_at < end_time
+        ).order_by(TemperatureRecord.recorded_at.asc()).all()
+
+        temp_values = [None] * num_intervals
+        humidity_values = [None] * num_intervals
+
+        for i in range(num_intervals):
+            bucket_start = start_time + timedelta(seconds=actual_interval * i)
+            bucket_end = start_time + timedelta(seconds=actual_interval * (i + 1))
+
+            bucket_records = [
+                r for r in records
+                if bucket_start <= r.recorded_at < bucket_end
+            ]
+
+            if bucket_records:
+                temp_values[i] = round(sum(r.temperature for r in bucket_records) / len(bucket_records), 2)
+                humidity_values[i] = round(sum(r.humidity for r in bucket_records) / len(bucket_records), 2)
+
+        temp_datasets.append({
+            'storage_id': storage.id,
+            'storage_name': storage.name,
+            'color': color,
+            'data': temp_values
+        })
+        humidity_datasets.append({
+            'storage_id': storage.id,
+            'storage_name': storage.name,
+            'color': color,
+            'data': humidity_values
+        })
+
     return jsonify({
         'start_time': start_time.strftime('%Y-%m-%d %H:%M:%S'),
         'end_time': end_time.strftime('%Y-%m-%d %H:%M:%S'),
-        'storages': results
+        'storages': results,
+        'trend': {
+            'labels': labels,
+            'temperature_datasets': temp_datasets,
+            'humidity_datasets': humidity_datasets
+        }
     })
 
 
@@ -858,6 +963,7 @@ def batch_save():
     data = request.json or {}
     storage_id = data.get('storage_id')
     records = data.get('records', [])
+    note = data.get('note', '')
 
     if not storage_id:
         return jsonify({'error': '请选择冷库'}), 400
@@ -865,6 +971,18 @@ def batch_save():
     storage = ColdStorage.query.get(storage_id)
     if not storage:
         return jsonify({'error': '冷库不存在'}), 404
+
+    if not records:
+        return jsonify({'error': '没有可导入的数据'}), 400
+
+    batch = ImportBatch(
+        storage_id=storage_id,
+        batch_type='manual',
+        imported_by=data.get('imported_by') or '手动导入',
+        note=note
+    )
+    db.session.add(batch)
+    db.session.flush()
 
     saved_count = 0
     created_alarms = []
@@ -877,6 +995,7 @@ def batch_save():
 
         record = TemperatureRecord(
             storage_id=storage_id,
+            batch_id=batch.id,
             temperature=float(r['temperature']),
             humidity=float(r['humidity']),
             is_manual=True,
@@ -886,6 +1005,7 @@ def batch_save():
 
         alarms = check_alarm(storage, float(r['temperature']), float(r['humidity']), record_time)
         for alarm in alarms:
+            alarm.batch_id = batch.id
             db.session.add(alarm)
             db.session.flush()
             created_alarms.append(alarm.to_dict())
@@ -893,13 +1013,17 @@ def batch_save():
 
         saved_count += 1
 
+    batch.record_count = saved_count
+    batch.alarm_count = len(created_alarms)
+
     db.session.commit()
 
     return jsonify({
         'status': 'success',
         'saved_count': saved_count,
         'alarm_count': len(created_alarms),
-        'alarms': created_alarms
+        'alarms': created_alarms,
+        'batch_id': batch.id
     })
 
 
@@ -912,7 +1036,84 @@ def active_alarms():
 @app.route('/api/alarms/<int:alarm_id>')
 def alarm_detail(alarm_id):
     alarm = AlarmLog.query.get_or_404(alarm_id)
-    return jsonify(alarm.to_dict())
+    storage = ColdStorage.query.get(alarm.storage_id)
+
+    before_records = TemperatureRecord.query.filter(
+        TemperatureRecord.storage_id == alarm.storage_id,
+        TemperatureRecord.recorded_at < alarm.triggered_at
+    ).order_by(TemperatureRecord.recorded_at.desc()).limit(5).all()
+    before_records = list(reversed(before_records))
+
+    after_records = TemperatureRecord.query.filter(
+        TemperatureRecord.storage_id == alarm.storage_id,
+        TemperatureRecord.recorded_at >= alarm.triggered_at
+    ).order_by(TemperatureRecord.recorded_at.asc()).limit(10).all()
+
+    context_records = before_records + after_records
+    context_data = [r.to_dict() for r in context_records]
+    for r in context_data:
+        r['is_alarm_point'] = False
+        if alarm.alarm_type.startswith('temp') and r['id'] == after_records[0].id if after_records else False:
+            pass
+
+    related_alarms = AlarmLog.query.filter(
+        AlarmLog.storage_id == alarm.storage_id,
+        AlarmLog.triggered_at >= alarm.triggered_at - timedelta(hours=1),
+        AlarmLog.triggered_at <= alarm.triggered_at + timedelta(hours=2)
+    ).order_by(AlarmLog.triggered_at.asc()).all()
+
+    result = alarm.to_dict()
+    result['context_records'] = context_data
+    result['context_alarms'] = [a.to_dict() for a in related_alarms]
+    result['temp_range'] = {'min': storage.temp_min, 'max': storage.temp_max} if storage else None
+    result['humidity_range'] = {'min': storage.humidity_min, 'max': storage.humidity_max} if storage else None
+
+    return jsonify(result)
+
+
+@app.route('/api/import-batches')
+def api_import_batches():
+    storage_id = request.args.get('storage_id', type=int)
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 20, type=int)
+
+    query = ImportBatch.query
+    if storage_id:
+        query = query.filter_by(storage_id=storage_id)
+    query = query.order_by(ImportBatch.imported_at.desc())
+
+    pagination = query.paginate(page=page, per_page=per_page)
+    return jsonify({
+        'total': pagination.total,
+        'page': pagination.page,
+        'pages': pagination.pages,
+        'items': [b.to_dict() for b in pagination.items]
+    })
+
+
+@app.route('/api/import-batches/<int:batch_id>/revoke', methods=['POST'])
+def revoke_import_batch(batch_id):
+    batch = ImportBatch.query.get_or_404(batch_id)
+
+    if batch.is_revoked:
+        return jsonify({'error': '该批次已撤回'}), 400
+
+    try:
+        AlarmLog.query.filter_by(batch_id=batch_id).delete()
+        TemperatureRecord.query.filter_by(batch_id=batch_id).delete()
+
+        batch.is_revoked = True
+        batch.revoked_at = datetime.now()
+
+        db.session.commit()
+
+        return jsonify({
+            'status': 'success',
+            'message': f'批次撤回成功，删除了 {batch.record_count} 条记录和 {batch.alarm_count} 条报警'
+        })
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'撤回失败：{str(e)}'}), 500
 
 
 @app.route('/api/manual-records')
@@ -950,40 +1151,52 @@ def api_storages():
 
 
 def init_demo_data():
-    if ColdStorage.query.count() == 0:
-        demo_storages = [
-            {'name': '肉类冷库1号', 'temp_min': -22, 'temp_max': -18, 'humidity_min': 85, 'humidity_max': 95},
-            {'name': '海鲜冷库2号', 'temp_min': -25, 'temp_max': -20, 'humidity_min': 80, 'humidity_max': 90},
-            {'name': '果蔬冷库3号', 'temp_min': 0, 'temp_max': 4, 'humidity_min': 90, 'humidity_max': 95}
-        ]
+    storage_count = ColdStorage.query.count()
+    record_count = TemperatureRecord.query.count()
+    alarm_count = AlarmLog.query.count()
 
-        for data in demo_storages:
-            storage = ColdStorage(**data)
-            db.session.add(storage)
-            db.session.flush()
+    if storage_count > 0 or record_count > 0 or alarm_count > 0:
+        if storage_count > 0:
+            print(f"数据持久化检查：检测到 {storage_count} 个冷库，跳过演示数据初始化")
+        if record_count > 0:
+            print(f"数据持久化检查：检测到 {record_count} 条温湿度记录，保留历史数据")
+        if alarm_count > 0:
+            print(f"数据持久化检查：检测到 {alarm_count} 条报警记录，保留历史数据")
+        return
 
-            base_time = datetime.now() - timedelta(hours=24)
-            for i in range(288):
-                record_time = base_time + timedelta(minutes=i * 5)
-                temperature, humidity = generate_sensor_data(storage)
+    demo_storages = [
+        {'name': '肉类冷库1号', 'temp_min': -22, 'temp_max': -18, 'humidity_min': 85, 'humidity_max': 95},
+        {'name': '海鲜冷库2号', 'temp_min': -25, 'temp_max': -20, 'humidity_min': 80, 'humidity_max': 90},
+        {'name': '果蔬冷库3号', 'temp_min': 0, 'temp_max': 4, 'humidity_min': 90, 'humidity_max': 95}
+    ]
 
-                record = TemperatureRecord(
-                    storage_id=storage.id,
-                    temperature=temperature,
-                    humidity=humidity,
-                    is_manual=False,
-                    recorded_at=record_time
-                )
-                db.session.add(record)
+    for data in demo_storages:
+        storage = ColdStorage(**data)
+        db.session.add(storage)
+        db.session.flush()
 
-                alarms = check_alarm(storage, temperature, humidity, record_time)
-                for alarm in alarms:
-                    db.session.add(alarm)
-                    db.session.flush()
-                    send_simulated_email(alarm)
+        base_time = datetime.now() - timedelta(hours=24)
+        for i in range(288):
+            record_time = base_time + timedelta(minutes=i * 5)
+            temperature, humidity = generate_sensor_data(storage)
 
-        db.session.commit()
-        print("演示数据初始化完成！")
+            record = TemperatureRecord(
+                storage_id=storage.id,
+                temperature=temperature,
+                humidity=humidity,
+                is_manual=False,
+                recorded_at=record_time
+            )
+            db.session.add(record)
+
+            alarms = check_alarm(storage, temperature, humidity, record_time)
+            for alarm in alarms:
+                db.session.add(alarm)
+                db.session.flush()
+                send_simulated_email(alarm)
+
+    db.session.commit()
+    print("演示数据初始化完成！")
 
 
 scheduler = BackgroundScheduler()
@@ -995,8 +1208,59 @@ def start_scheduler():
     print("定时任务已启动：每5分钟自动采集一次温湿度数据")
 
 
+def migrate_db():
+    from sqlalchemy import inspect, text
+    inspector = inspect(db.engine)
+
+    tables = inspector.get_table_names()
+
+    if 'import_batch' not in tables:
+        print("数据库迁移：创建 import_batch 表...")
+        with db.engine.connect() as conn:
+            conn.execute(text("""
+                CREATE TABLE import_batch (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    storage_id INTEGER NOT NULL,
+                    batch_type VARCHAR(20) DEFAULT 'manual',
+                    record_count INTEGER DEFAULT 0,
+                    alarm_count INTEGER DEFAULT 0,
+                    imported_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    imported_by VARCHAR(100) DEFAULT '系统导入',
+                    note VARCHAR(500),
+                    is_revoked BOOLEAN DEFAULT 0,
+                    revoked_at DATETIME,
+                    FOREIGN KEY (storage_id) REFERENCES cold_storage (id)
+                )
+            """))
+            conn.commit()
+        print("数据库迁移：import_batch 表创建完成")
+
+    if 'temperature_record' in tables:
+        columns = [col['name'] for col in inspector.get_columns('temperature_record')]
+        if 'batch_id' not in columns:
+            print("数据库迁移：为 temperature_record 添加 batch_id 列...")
+            with db.engine.connect() as conn:
+                conn.execute(text("""
+                    ALTER TABLE temperature_record ADD COLUMN batch_id INTEGER
+                """))
+                conn.commit()
+            print("数据库迁移：temperature_record.batch_id 列添加完成")
+
+    if 'alarm_log' in tables:
+        columns = [col['name'] for col in inspector.get_columns('alarm_log')]
+        if 'batch_id' not in columns:
+            print("数据库迁移：为 alarm_log 添加 batch_id 列...")
+            with db.engine.connect() as conn:
+                conn.execute(text("""
+                    ALTER TABLE alarm_log ADD COLUMN batch_id INTEGER
+                """))
+                conn.commit()
+            print("数据库迁移：alarm_log.batch_id 列添加完成")
+
+
 with app.app_context():
     db.create_all()
+    migrate_db()
     init_demo_data()
 
 if __name__ == '__main__':

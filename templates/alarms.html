@@ -300,7 +300,7 @@ function viewAlarmDetail(id) {
             let handledSection = '';
             if (alarm.is_handled) {
                 handledSection = `
-                    <div style="margin-top:1.5rem; padding-top:1rem; border-top:1px solid #e2e8f0;">
+                    <div style="margin-top:1.5rem;">
                         <h4 style="margin-bottom:1rem; color:#065f46;">✅ 处理记录</h4>
                         <div class="detail-grid">
                             <div class="detail-item">
@@ -320,13 +320,110 @@ function viewAlarmDetail(id) {
                 `;
             } else {
                 handledSection = `
-                    <div style="margin-top:1.5rem; padding-top:1rem; border-top:1px solid #e2e8f0;">
+                    <div style="margin-top:1.5rem;">
                         <p style="color:#f59e0b; font-weight:500;">⚠️ 该报警尚未处理</p>
                     </div>
                 `;
             }
 
+            let contextHtml = '';
+            if (alarm.context_records && alarm.context_records.length > 0) {
+                contextHtml = `
+                    <div style="margin-top:1.5rem;">
+                        <h4 style="margin-bottom:1rem;">📈 报警前后温湿度数据（${alarm.context_records.length}条）</h4>
+                        <div class="detail-grid" style="grid-template-columns: 1fr 1fr; margin-bottom:0.75rem;">
+                            <div class="detail-item">
+                                <label>温度范围</label>
+                                <span>${alarm.temp_range.min} ~ ${alarm.temp_range.max}°C</span>
+                            </div>
+                            <div class="detail-item">
+                                <label>湿度范围</label>
+                                <span>${alarm.humidity_range.min} ~ ${alarm.humidity_range.max}%</span>
+                            </div>
+                        </div>
+                        <div style="max-height:250px; overflow-y:auto; border:1px solid #e2e8f0; border-radius:8px;">
+                            <table class="data-table" style="margin:0; border:none;">
+                                <thead style="position:sticky; top:0; background:#f8fafc;">
+                                    <tr>
+                                        <th>时间</th>
+                                        <th>温度(°C)</th>
+                                        <th>湿度(%)</th>
+                                        <th>状态</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${alarm.context_records.map(r => {
+                                        const tempOk = r.temperature >= alarm.temp_range.min && r.temperature <= alarm.temp_range.max;
+                                        const humOk = r.humidity >= alarm.humidity_range.min && r.humidity <= alarm.humidity_range.max;
+                                        const isAlarmPoint = r.recorded_at === alarm.triggered_at;
+                                        const isAbnormal = !tempOk || !humOk;
+                                        let statusText = '正常';
+                                        let statusClass = '';
+                                        if (isAlarmPoint) {
+                                            statusText = '⚠️ 报警点';
+                                            statusClass = 'alarm-unhandled';
+                                        } else if (isAbnormal) {
+                                            statusText = '超限';
+                                            statusClass = '';
+                                        }
+                                        return `
+                                            <tr class="${isAlarmPoint ? 'alarm-unhandled' : ''}" style="${isAbnormal && !isAlarmPoint ? 'background:#fef3c7;' : ''}">
+                                                <td>${r.recorded_at}</td>
+                                                <td style="${!tempOk ? 'color:#dc2626; font-weight:600;' : ''}">${r.temperature}</td>
+                                                <td style="${!humOk ? 'color:#dc2626; font-weight:600;' : ''}">${r.humidity}</td>
+                                                <td>${statusText}</td>
+                                            </tr>
+                                        `;
+                                    }).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                        <p style="font-size:0.8125rem; color:#64748b; margin-top:0.5rem;">
+                            💡 黄色高亮=其他超限点，红色高亮行=本报警的触发时刻。可观察是短时波动还是持续异常。
+                        </p>
+                    </div>
+                `;
+            }
+
+            let relatedAlarmsHtml = '';
+            if (alarm.context_alarms && alarm.context_alarms.length > 1) {
+                relatedAlarmsHtml = `
+                    <div style="margin-top:1.5rem;">
+                        <h4 style="margin-bottom:1rem;">🔔 同期相关报警（${alarm.context_alarms.length} 条）</h4>
+                        <div style="max-height:180px; overflow-y:auto; border:1px solid #e2e8f0; border-radius:8px;">
+                            <table class="data-table" style="margin:0; border:none;">
+                                <thead style="position:sticky; top:0; background:#f8fafc;">
+                                    <tr>
+                                        <th>时间</th>
+                                        <th>类型</th>
+                                        <th>内容</th>
+                                        <th>状态</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${alarm.context_alarms.map(a => {
+                                        const isCurrent = a.id === alarm.id;
+                                        return `
+                                            <tr class="${isCurrent ? 'alarm-unhandled' : ''}">
+                                                <td>${a.triggered_at}</td>
+                                                <td>${a.alarm_type.includes('temp') ? '温度' : '湿度'}</td>
+                                                <td>${a.message}</td>
+                                                <td>${isCurrent ? '⬅️ 当前' : (a.is_handled ? '已处理' : '待处理')}</td>
+                                            </tr>
+                                        `;
+                                    }).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                        <p style="font-size:0.8125rem; color:#64748b; margin-top:0.5rem;">
+                            ⏱ 显示报警前1小时至后2小时内的所有报警，便于判断是否为连续异常。
+                        </p>
+                    </div>
+                `;
+            }
+
             body.innerHTML = `
+                <h4 style="margin-bottom:1rem;">📋 基本信息</h4>
                 <div class="detail-grid">
                     <div class="detail-item">
                         <label>冷库名称</label>
@@ -353,6 +450,9 @@ function viewAlarmDetail(id) {
                         <span style="color:#dc2626; font-weight:500;">${alarm.message}</span>
                     </div>
                 </div>
+
+                ${contextHtml}
+                ${relatedAlarmsHtml}
                 ${handledSection}
             `;
             document.getElementById('alarmDetailModal').style.display = 'flex';
